@@ -26,6 +26,27 @@ type GetAccountRateLimitsResponse = {
   rateLimitsByLimitId: Record<string, RateLimitSnapshot | undefined> | null;
 };
 
+type Skill = {
+  name: string;
+  description: string;
+  interface?: {
+    displayName: string;
+    shortDescription: string;
+  };
+  scope: "user" | "system";
+  enabled: boolean;
+};
+
+type SkillsListEntry = {
+  cwd: string;
+  skills: Skill[];
+  errors: unknown[];
+};
+
+type SkillsListResponse = {
+  data: SkillsListEntry[];
+};
+
 type Thread = {
   id: string;
   preview: string;
@@ -60,6 +81,7 @@ type DisplayWindow = {
 type UsageData = {
   rateLimits: GetAccountRateLimitsResponse;
   threads: Thread[];
+  skills: Skill[];
 };
 
 const REQUEST_TIMEOUT_MS = 20000;
@@ -76,6 +98,7 @@ export default function Command() {
   const { data, error, isLoading, revalidate } = usePromise(fetchCodexUsage);
   const windows = data ? getCodexWindows(data.rateLimits) : [];
   const activity = data ? getRecentActivity(data.threads) : null;
+  const skills = data?.skills ?? [];
 
   const refreshAction = (
     <Action
@@ -153,6 +176,55 @@ export default function Command() {
           />
         </List.Section>
       ) : null}
+      {skills.length > 0 ? (
+        <List.Section title="Skills">
+          <List.Item
+            icon={Icon.Wand}
+            title="Skills"
+            accessories={[{ text: String(skills.length) }]}
+            actions={
+              <ActionPanel>
+                <Action.Push title="View Skills" target={<SkillsDetailView skills={skills} />} />
+                {refreshAction}
+              </ActionPanel>
+            }
+          />
+        </List.Section>
+      ) : null}
+    </List>
+  );
+}
+
+function SkillsDetailView({ skills }: { skills: Skill[] }) {
+  const userSkills = skills.filter((s) => s.scope === "user");
+  const systemSkills = skills.filter((s) => s.scope === "system");
+
+  return (
+    <List navigationTitle="Skills">
+      {userSkills.length > 0 ? (
+        <List.Section title="Your Skills">
+          {userSkills.map((skill) => (
+            <List.Item
+              key={skill.name}
+              icon={Icon.Wand}
+              title={skill.interface?.displayName ?? formatSkillName(skill.name)}
+              subtitle={skill.interface?.shortDescription}
+            />
+          ))}
+        </List.Section>
+      ) : null}
+      {systemSkills.length > 0 ? (
+        <List.Section title="Built-in">
+          {systemSkills.map((skill) => (
+            <List.Item
+              key={skill.name}
+              icon={Icon.Wand}
+              title={skill.interface?.displayName ?? formatSkillName(skill.name)}
+              subtitle={skill.interface?.shortDescription}
+            />
+          ))}
+        </List.Section>
+      ) : null}
     </List>
   );
 }
@@ -173,7 +245,9 @@ function fetchCodexUsage(): Promise<UsageData> {
     let settled = false;
     let rateLimits: GetAccountRateLimitsResponse | null = null;
     let threads: Thread[] = [];
+    let skills: Skill[] = [];
     let threadListFinished = false;
+    let skillsListFinished = false;
     let activityTimeout: NodeJS.Timeout | undefined;
 
     const timeout = setTimeout(() => {
@@ -245,10 +319,11 @@ function fetchCodexUsage(): Promise<UsageData> {
             },
           }) + "\n",
         );
+        child.stdin.write(JSON.stringify({ id: 4, method: "skills/list", params: { cwd: homedir() } }) + "\n");
         return;
       }
 
-      if (message.id !== 2 && message.id !== 3) {
+      if (message.id !== 2 && message.id !== 3 && message.id !== 4) {
         return;
       }
 
@@ -258,8 +333,14 @@ function fetchCodexUsage(): Promise<UsageData> {
         }
         if (message.id === 3) {
           threadListFinished = true;
-          if (rateLimits) {
-            finish(null, { rateLimits, threads });
+          if (rateLimits && skillsListFinished) {
+            finish(null, { rateLimits, threads, skills });
+          }
+        }
+        if (message.id === 4) {
+          skillsListFinished = true;
+          if (rateLimits && threadListFinished) {
+            finish(null, { rateLimits, threads, skills });
           }
         }
         return;
@@ -274,7 +355,7 @@ function fetchCodexUsage(): Promise<UsageData> {
         rateLimits = message.result as GetAccountRateLimitsResponse;
         activityTimeout = setTimeout(() => {
           if (rateLimits) {
-            finish(null, { rateLimits, threads });
+            finish(null, { rateLimits, threads, skills });
           }
         }, 1500);
       }
@@ -284,8 +365,14 @@ function fetchCodexUsage(): Promise<UsageData> {
         threadListFinished = true;
       }
 
-      if (rateLimits && threadListFinished) {
-        finish(null, { rateLimits, threads });
+      if (message.id === 4) {
+        const entries = (message.result as SkillsListResponse | undefined)?.data ?? [];
+        skills = entries.flatMap((entry) => entry.skills).filter((s) => s.enabled);
+        skillsListFinished = true;
+      }
+
+      if (rateLimits && threadListFinished && skillsListFinished) {
+        finish(null, { rateLimits, threads, skills });
       }
     }
 
@@ -447,6 +534,14 @@ function formatPercent(value: number): string {
 
 function clampPercent(value: number): number {
   return Math.min(100, Math.max(0, value));
+}
+
+function formatSkillName(name: string): string {
+  const baseName = name.includes(":") ? (name.split(":")[1] ?? name) : name;
+  return baseName
+    .split("-")
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
 }
 
 function formatStderr(stderr: string): string {
