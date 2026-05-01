@@ -469,7 +469,7 @@ function getRemainingColor(remainingPercent: number): Color {
   }
 
   if (remainingPercent < 50) {
-    return Color.Orange;
+    return Color.Yellow;
   }
 
   return Color.Green;
@@ -500,10 +500,10 @@ function formatTimeUntil(timestampSeconds: number): string {
   }
 
   if (hours > 0) {
-    return `${hours}h ${minutes}min`;
+    return `${hours}h ${minutes}m`;
   }
 
-  return `${minutes}min`;
+  return `${minutes}m`;
 }
 
 function formatTimeAgo(timestampSeconds: number): string {
