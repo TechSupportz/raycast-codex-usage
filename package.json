@@ -17,7 +17,39 @@
       "name": "view-codex-usage",
       "title": "View Codex Usage",
       "description": "View Codex usage limits",
-      "mode": "view"
+      "mode": "view",
+      "preferences": [
+        {
+          "name": "dataScenario",
+          "title": "Data Scenario",
+          "description": "Choose live data or a static mock scenario for screenshots.",
+          "type": "dropdown",
+          "required": false,
+          "default": "live",
+          "data": [
+            {
+              "title": "Live Data",
+              "value": "live"
+            },
+            {
+              "title": "Healthy Usage",
+              "value": "healthy"
+            },
+            {
+              "title": "Busy Week",
+              "value": "busy"
+            },
+            {
+              "title": "Near Limit",
+              "value": "near-limit"
+            },
+            {
+              "title": "Fresh Account",
+              "value": "fresh"
+            }
+          ]
+        }
+      ]
     }
   ],
   "dependencies": {

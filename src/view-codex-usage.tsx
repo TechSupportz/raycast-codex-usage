@@ -1,4 +1,4 @@
-import { Action, ActionPanel, Color, Detail, Icon, List, showToast, Toast } from "@raycast/api";
+import { Action, ActionPanel, Color, Detail, Icon, List, getPreferenceValues, showToast, Toast } from "@raycast/api";
 import { usePromise, getProgressIcon } from "@raycast/utils";
 import { spawn } from "child_process";
 import { existsSync } from "fs";
@@ -82,6 +82,12 @@ type UsageData = {
   rateLimits: GetAccountRateLimitsResponse;
   threads: Thread[];
   skills: Skill[];
+};
+
+type DataScenario = "live" | "healthy" | "busy" | "near-limit" | "fresh";
+
+type Preferences = {
+  dataScenario?: DataScenario;
 };
 
 const REQUEST_TIMEOUT_MS = 20000;
@@ -230,6 +236,12 @@ function SkillsDetailView({ skills }: { skills: Skill[] }) {
 }
 
 function fetchCodexUsage(): Promise<UsageData> {
+  const scenario = getPreferenceValues<Preferences>().dataScenario ?? "live";
+
+  if (scenario !== "live") {
+    return Promise.resolve(getMockUsageData(scenario));
+  }
+
   return new Promise((resolve, reject) => {
     const codexExecutable = resolveCodexExecutable();
     const child = spawn(codexExecutable, ["app-server"], {
@@ -395,6 +407,192 @@ function fetchCodexUsage(): Promise<UsageData> {
       resolve(result as UsageData);
     }
   });
+}
+
+function getMockUsageData(scenario: Exclude<DataScenario, "live">): UsageData {
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  const scenarioData = MOCK_SCENARIOS[scenario];
+
+  return {
+    rateLimits: {
+      rateLimits: getMockRateLimitSnapshot(nowSeconds, scenarioData),
+      rateLimitsByLimitId: {
+        codex: getMockRateLimitSnapshot(nowSeconds, scenarioData),
+      },
+    },
+    threads: getMockThreads(nowSeconds, scenarioData.threadAgesMinutes),
+    skills: getMockSkills(scenarioData.skillCount),
+  };
+}
+
+const MOCK_SCENARIOS: Record<
+  Exclude<DataScenario, "live">,
+  {
+    fiveHourUsedPercent: number;
+    weeklyUsedPercent: number;
+    fiveHourResetMinutes: number;
+    weeklyResetMinutes: number;
+    threadAgesMinutes: number[];
+    skillCount: number;
+  }
+> = {
+  healthy: {
+    fiveHourUsedPercent: 27,
+    weeklyUsedPercent: 61,
+    fiveHourResetMinutes: 138,
+    weeklyResetMinutes: 4680,
+    threadAgesMinutes: [9, 120, 2880, 7200],
+    skillCount: 3,
+  },
+  busy: {
+    fiveHourUsedPercent: 54,
+    weeklyUsedPercent: 78,
+    fiveHourResetMinutes: 46,
+    weeklyResetMinutes: 1740,
+    threadAgesMinutes: [4, 23, 58, 95, 180, 260, 360, 510, 880, 1320, 2100, 3600],
+    skillCount: 5,
+  },
+  "near-limit": {
+    fiveHourUsedPercent: 91,
+    weeklyUsedPercent: 96,
+    fiveHourResetMinutes: 18,
+    weeklyResetMinutes: 390,
+    threadAgesMinutes: [3, 17, 34, 52, 76, 115, 170, 240, 375, 540, 780, 1040, 1260, 1510, 1930],
+    skillCount: 4,
+  },
+  fresh: {
+    fiveHourUsedPercent: 3,
+    weeklyUsedPercent: 8,
+    fiveHourResetMinutes: 286,
+    weeklyResetMinutes: 9360,
+    threadAgesMinutes: [32],
+    skillCount: 1,
+  },
+};
+
+function getMockRateLimitSnapshot(
+  nowSeconds: number,
+  scenario: (typeof MOCK_SCENARIOS)[Exclude<DataScenario, "live">],
+): RateLimitSnapshot {
+  return {
+    limitId: "codex",
+    limitName: "Codex",
+    primary: {
+      usedPercent: scenario.fiveHourUsedPercent,
+      windowDurationMins: 300,
+      resetsAt: nowSeconds + scenario.fiveHourResetMinutes * 60,
+    },
+    secondary: {
+      usedPercent: scenario.weeklyUsedPercent,
+      windowDurationMins: 10080,
+      resetsAt: nowSeconds + scenario.weeklyResetMinutes * 60,
+    },
+    credits: null,
+    planType: "plus",
+    rateLimitReachedType: null,
+  };
+}
+
+function getMockThreads(nowSeconds: number, agesMinutes: number[]): Thread[] {
+  const mockThreads = [
+    {
+      name: "Raycast extension polish",
+      preview: "Tightened the usage view and prepared screenshots for review.",
+      cwd: "/Users/tnitish/Developer/Personal Projects/raycast-codex-usage",
+      source: "appServer",
+    },
+    {
+      name: "Codex usage API notes",
+      preview: "Mapped rate limit windows from the Codex app-server response.",
+      cwd: "/Users/tnitish/Developer/Personal Projects/codex-notes",
+      source: "cli",
+    },
+    {
+      name: "Weekly planning",
+      preview: "Reviewed recent sessions and follow-up tasks.",
+      cwd: "/Users/tnitish/Developer/Personal Projects",
+      source: "vscode",
+    },
+    {
+      name: null,
+      preview: "Investigated a flaky build failure.",
+      cwd: "/Users/tnitish/Developer/Personal Projects/build-tools",
+      source: "cli",
+    },
+    {
+      name: "PR screenshot pass",
+      preview: "Prepared stable usage states for the Raycast submission.",
+      cwd: "/Users/tnitish/Developer/Personal Projects/raycast-codex-usage",
+      source: "appServer",
+    },
+  ];
+
+  return agesMinutes.map((ageMinutes, index) => {
+    const template = mockThreads[index % mockThreads.length];
+    const updatedAt = nowSeconds - ageMinutes * 60;
+
+    return {
+      id: `thread_mock_${index + 1}`,
+      ...template,
+      createdAt: updatedAt - 33 * 60,
+      updatedAt,
+    };
+  });
+}
+
+function getMockSkills(count: number): Skill[] {
+  return [
+    {
+      name: "frontend-design",
+      description: "Create distinctive, production-grade frontend interfaces.",
+      interface: {
+        displayName: "Frontend Design",
+        shortDescription: "Build polished app and web interfaces",
+      },
+      scope: "user",
+      enabled: true,
+    },
+    {
+      name: "swiftui-expert-skill",
+      description: "Write, review, and improve SwiftUI code.",
+      interface: {
+        displayName: "SwiftUI Expert",
+        shortDescription: "Review SwiftUI state, layout, and performance",
+      },
+      scope: "user",
+      enabled: true,
+    },
+    {
+      name: "openai-docs",
+      description: "Use up-to-date OpenAI product documentation.",
+      interface: {
+        displayName: "OpenAI Docs",
+        shortDescription: "Answer API questions from official docs",
+      },
+      scope: "system",
+      enabled: true,
+    },
+    {
+      name: "browser-use:browser",
+      description: "Browser automation for local development targets.",
+      interface: {
+        displayName: "Browser",
+        shortDescription: "Inspect and test local browser targets",
+      },
+      scope: "system",
+      enabled: true,
+    },
+    {
+      name: "spreadsheets:spreadsheets",
+      description: "Create, edit, analyze, and visualize spreadsheet files.",
+      interface: {
+        displayName: "Spreadsheets",
+        shortDescription: "Work with CSV and workbook files",
+      },
+      scope: "system",
+      enabled: true,
+    },
+  ].slice(0, count);
 }
 
 function resolveCodexExecutable(): string {
