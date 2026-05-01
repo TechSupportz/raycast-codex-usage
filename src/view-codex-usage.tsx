@@ -1,10 +1,9 @@
-import { Action, ActionPanel, Color, Detail, Icon, showToast, Toast } from "@raycast/api";
-import { usePromise } from "@raycast/utils";
+import { Action, ActionPanel, Color, Detail, Icon, List, showToast, Toast } from "@raycast/api";
+import { usePromise, getProgressIcon } from "@raycast/utils";
 import { spawn } from "child_process";
 import { existsSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
-import React from "react";
 
 type RateLimitWindow = {
   usedPercent: number;
@@ -76,19 +75,15 @@ const CODEX_EXECUTABLE_CANDIDATES = [
 export default function Command() {
   const { data, error, isLoading, revalidate } = usePromise(fetchCodexUsage);
   const windows = data ? getCodexWindows(data.rateLimits) : [];
-  const account = data ? getCodexSnapshot(data.rateLimits) : null;
   const activity = data ? getRecentActivity(data.threads) : null;
 
-  const actions = (
-    <ActionPanel>
-      <Action
-        title="Refresh"
-        icon={Icon.ArrowClockwise}
-        onAction={revalidate}
-        shortcut={{ modifiers: ["cmd"], key: "r" }}
-      />
-      <Action.OpenInBrowser title="Open Codex Usage Settings" url="https://chatgpt.com/codex/settings/usage" />
-    </ActionPanel>
+  const refreshAction = (
+    <Action
+      title="Refresh"
+      icon={Icon.ArrowClockwise}
+      onAction={revalidate}
+      shortcut={{ modifiers: ["cmd"], key: "r" }}
+    />
   );
 
   if (error) {
@@ -105,75 +100,61 @@ export default function Command() {
   }
 
   return (
-    <Detail
-      isLoading={isLoading}
-      markdown={buildMarkdown(windows)}
-      metadata={
-        <Detail.Metadata>
-          {account ? (
-            <Detail.Metadata.Label
-              title="Plan"
-              text={account.planType ? formatIdentifier(account.planType) : "Unknown"}
-              icon={Icon.Person}
+    <List isLoading={isLoading}>
+      <List.Section title="Rate Limits">
+        {windows.map((item) => {
+          const remaining = getRemainingPercent(item.window);
+          return (
+            <List.Item
+              key={item.id}
+              icon={getProgressIcon(remaining / 100, getRemainingColor(remaining))}
+              title={item.label}
+              subtitle={
+                item.window.resetsAt
+                  ? `Resets in ${formatTimeUntil(item.window.resetsAt)} · ${formatResetDate(item.window.resetsAt)}`
+                  : undefined
+              }
+              accessories={[
+                { tag: { value: `${formatPercent(remaining)}% remaining`, color: getRemainingColor(remaining) } },
+              ]}
+              actions={
+                <ActionPanel>
+                  {refreshAction}
+                  <Action.OpenInBrowser
+                    title="Open Codex Usage Settings"
+                    url="https://chatgpt.com/codex/settings/usage"
+                  />
+                </ActionPanel>
+              }
             />
-          ) : null}
-          {account?.rateLimitReachedType ? (
-            <Detail.Metadata.Label
-              title="Rate Limited"
-              text={formatIdentifier(account.rateLimitReachedType)}
-              icon={{ source: Icon.Warning, tintColor: Color.Red }}
-            />
-          ) : null}
-          {account ? <Detail.Metadata.Separator /> : null}
-          {activity ? (
-            <Detail.Metadata.Label
-              title="Today"
-              text={`${activity.todayCount} session${activity.todayCount !== 1 ? "s" : ""}`}
-              icon={Icon.Clock}
-            />
-          ) : null}
-          {activity ? (
-            <Detail.Metadata.Label
-              title="Last 7 Days"
-              text={`${activity.weekCount} session${activity.weekCount !== 1 ? "s" : ""}`}
-              icon={Icon.Calendar}
-            />
-          ) : null}
-          {activity ? <Detail.Metadata.Separator /> : null}
-          {activity ? (
-            <Detail.Metadata.Label title="Latest Session" text={activity.latestTitle} icon={Icon.Bubble} />
-          ) : null}
-          {activity ? (
-            <Detail.Metadata.Label title="Last Active" text={formatTimeAgo(activity.latestUpdatedAt)} />
-          ) : null}
-        </Detail.Metadata>
-      }
-      actions={actions}
-    />
+          );
+        })}
+      </List.Section>
+      {activity ? (
+        <List.Section title="Sessions">
+          <List.Item
+            icon={Icon.Clock}
+            title="Today"
+            subtitle={`${activity.todayCount} session${activity.todayCount !== 1 ? "s" : ""}`}
+            actions={<ActionPanel>{refreshAction}</ActionPanel>}
+          />
+          <List.Item
+            icon={Icon.Calendar}
+            title="Last 7 Days"
+            subtitle={`${activity.weekCount} session${activity.weekCount !== 1 ? "s" : ""}`}
+            actions={<ActionPanel>{refreshAction}</ActionPanel>}
+          />
+          <List.Item
+            icon={Icon.Bubble}
+            title="Latest Session"
+            subtitle={activity.latestTitle}
+            accessories={[{ text: formatTimeAgo(activity.latestUpdatedAt) }]}
+            actions={<ActionPanel>{refreshAction}</ActionPanel>}
+          />
+        </List.Section>
+      ) : null}
+    </List>
   );
-}
-
-function buildProgressBar(remainingPercent: number, width = 10): string {
-  const filled = Math.round((clampPercent(remainingPercent) / 100) * width);
-  const dot = remainingPercent <= 20 ? "🔴" : remainingPercent < 50 ? "🟡" : "🟢";
-  return dot.repeat(filled) + "⚪".repeat(width - filled);
-}
-
-function buildMarkdown(windows: DisplayWindow[]): string {
-  if (windows.length === 0) return "";
-
-  const sections = windows.map((item) => {
-    const remaining = getRemainingPercent(item.window);
-    const bar = buildProgressBar(remaining);
-    const resetLine = item.window.resetsAt
-      ? `Resets ${formatResetDate(item.window.resetsAt)} · **${formatTimeUntil(item.window.resetsAt)}** remaining`
-      : "";
-    return [`## ${item.label}`, `${bar} **${formatPercent(remaining)}%** remaining`, resetLine ? `\n${resetLine}` : ""]
-      .filter(Boolean)
-      .join("\n\n");
-  });
-
-  return sections.join("\n\n---\n\n");
 }
 
 function fetchCodexUsage(): Promise<UsageData> {
@@ -395,35 +376,6 @@ function getRecentActivity(threads: Thread[]) {
   };
 }
 
-function getRemainingIcon(remainingPercent: number) {
-  return {
-    source: getProgressIcon(remainingPercent),
-    tintColor: getRemainingColor(remainingPercent),
-  };
-}
-
-function getProgressIcon(percent: number): Icon {
-  const clamped = clampPercent(percent);
-
-  if (clamped <= 12.5) {
-    return Icon.CircleProgress;
-  }
-
-  if (clamped <= 37.5) {
-    return Icon.CircleProgress25;
-  }
-
-  if (clamped <= 62.5) {
-    return Icon.CircleProgress50;
-  }
-
-  if (clamped <= 87.5) {
-    return Icon.CircleProgress75;
-  }
-
-  return Icon.CircleProgress100;
-}
-
 function getRemainingColor(remainingPercent: number): Color {
   if (remainingPercent <= 20) {
     return Color.Red;
@@ -442,11 +394,11 @@ function getRemainingPercent(window: RateLimitWindow): number {
 
 function formatResetDate(timestampSeconds: number): string {
   return new Intl.DateTimeFormat(undefined, {
-    weekday: "short",
+    weekday: "long",
     month: "short",
     day: "numeric",
     hour: "numeric",
-    minute: "2-digit",
+    minute: "numeric",
   }).format(new Date(timestampSeconds * 1000));
 }
 
@@ -461,10 +413,10 @@ function formatTimeUntil(timestampSeconds: number): string {
   }
 
   if (hours > 0) {
-    return `${hours}h ${minutes}m`;
+    return `${hours}h ${minutes}min`;
   }
 
-  return `${minutes}m`;
+  return `${minutes}min`;
 }
 
 function formatTimeAgo(timestampSeconds: number): string {
@@ -483,13 +435,6 @@ function formatTimeAgo(timestampSeconds: number): string {
   }
 
   return new Intl.RelativeTimeFormat(undefined, { numeric: "auto" }).format(Math.round(diffHours / 24), "day");
-}
-
-function formatIdentifier(value: string): string {
-  return value
-    .replace(/[_-]+/g, " ")
-    .replace(/\b\w/g, (letter) => letter.toUpperCase())
-    .trim();
 }
 
 function getDirectoryName(path: string): string {
