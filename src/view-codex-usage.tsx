@@ -442,12 +442,7 @@ function getCodexWindows(response: GetAccountRateLimitsResponse): DisplayWindow[
   }
 
   return candidates.map(({ window, index }) => ({
-    id:
-      window.windowDurationMins === 300
-        ? "5h"
-        : window.windowDurationMins === 10080
-          ? "weekly"
-          : `window-${index}`,
+    id: window.windowDurationMins === 300 ? "5h" : window.windowDurationMins === 10080 ? "weekly" : `window-${index}`,
     label: getWindowLabel(window, index),
     window,
   }));
