@@ -14,6 +14,7 @@ import type {
   Thread,
   ThreadListResponse,
 } from "./codex-usage-types";
+import { parseResetExpiry } from "./reset-expiry";
 
 const REQUEST_TIMEOUT_MS = 20000;
 const OPTIONAL_DATA_TIMEOUT_MS = 3000;
@@ -300,9 +301,9 @@ function isRateLimitResetCredit(value: unknown): value is RateLimitResetCredit {
     typeof value.id === "string" &&
     typeof value.status === "string" &&
     typeof value.granted_at === "string" &&
-    Number.isFinite(Date.parse(value.granted_at)) &&
+    Number.isFinite(parseResetExpiry(value.granted_at)) &&
     typeof value.expires_at === "string" &&
-    Number.isFinite(Date.parse(value.expires_at)) &&
+    Number.isFinite(parseResetExpiry(value.expires_at)) &&
     (value.title == null || typeof value.title === "string") &&
     (value.description == null || typeof value.description === "string")
   );

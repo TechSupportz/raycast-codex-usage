@@ -2,6 +2,7 @@ import { Action, ActionPanel, Color, Detail, Icon, List } from "@raycast/api";
 import { usePromise, getProgressIcon } from "@raycast/utils";
 import { useCallback, useRef, useState } from "react";
 import { fetchCodexUsage, THREAD_LIST_LIMIT } from "./codex-usage";
+import { formatResetTimeRemaining, parseResetExpiry } from "./reset-expiry";
 import type {
   DisplayWindow,
   GetAccountRateLimitsResponse,
@@ -288,7 +289,7 @@ function SkillsDetailView({ skills }: { skills: Skill[] }) {
 function getAvailableResets(response: RateLimitResetCreditsResponse): RateLimitResetCredit[] {
   return response.credits
     .filter((credit) => credit.status === "available")
-    .sort((a, b) => Date.parse(a.expires_at) - Date.parse(b.expires_at));
+    .sort((a, b) => parseResetExpiry(a.expires_at) - parseResetExpiry(b.expires_at));
 }
 
 function formatResetCount(count: number): string {
@@ -296,18 +297,7 @@ function formatResetCount(count: number): string {
 }
 
 function formatTimeUntilDate(date: string): string {
-  const millisecondsRemaining = Date.parse(date) - Date.now();
-
-  if (millisecondsRemaining <= 0) {
-    return "Expired";
-  }
-
-  const hoursRemaining = millisecondsRemaining / (60 * 60 * 1000);
-  if (hoursRemaining < 24) {
-    return `${Math.max(1, Math.ceil(hoursRemaining))}h`;
-  }
-
-  return `${Math.floor(hoursRemaining / 24)}d`;
+  return formatResetTimeRemaining(date);
 }
 
 function formatTimeRemainingTag(date: string): string {
@@ -323,7 +313,7 @@ function formatDateTime(date: string): string {
     year: "numeric",
     hour: "numeric",
     minute: "2-digit",
-  }).format(new Date(date));
+  }).format(parseResetExpiry(date));
 }
 
 function formatCompactDateTime(date: string): string {
@@ -333,11 +323,11 @@ function formatCompactDateTime(date: string): string {
     month: "short",
     hour: "numeric",
     minute: "2-digit",
-  }).format(new Date(date));
+  }).format(parseResetExpiry(date));
 }
 
 function getResetExpiryColor(date: string): Color {
-  const daysRemaining = (Date.parse(date) - Date.now()) / (24 * 60 * 60 * 1000);
+  const daysRemaining = (parseResetExpiry(date) - Date.now()) / (24 * 60 * 60 * 1000);
 
   if (daysRemaining < 7) {
     return Color.Red;
