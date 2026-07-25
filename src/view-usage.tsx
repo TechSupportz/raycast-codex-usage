@@ -275,7 +275,14 @@ function buildAccountRows({ config, account }: AccountState): ReactElement[] {
   ];
 
   if (plan) {
-    rows.push(<List.Item.Detail.Metadata.Label key="plan" title="Plan" text={plan} icon={Icon.Star} />);
+    rows.push(
+      <List.Item.Detail.Metadata.Label
+        key="plan"
+        title="Plan"
+        text={plan}
+        icon={getPlanIcon(config.provider, account?.plan)}
+      />,
+    );
   }
 
   if (account?.email) {
@@ -390,6 +397,50 @@ function formatPlan(plan: string | null): string | null {
   }
 
   return plan.charAt(0).toUpperCase() + plan.slice(1);
+}
+
+/**
+ * Provider-neutral tiers, ordered low to high. OpenAI and Anthropic name
+ * their tiers differently but line up one-for-one on price and features:
+ * ChatGPT Plus ≈ Claude Pro, and ChatGPT Pro ≈ Claude Max. Mapping both
+ * through this instead of matching plan strings directly means those
+ * equivalent tiers get the same icon.
+ */
+type PlanTier = "free" | "plus" | "premium" | "team" | "enterprise" | "edu";
+
+const CODEX_PLAN_TIERS: Record<string, PlanTier> = {
+  free: "free",
+  plus: "plus",
+  pro: "premium",
+  team: "team",
+  business: "enterprise",
+  enterprise: "enterprise",
+  edu: "edu",
+  education: "edu",
+};
+
+const CLAUDE_PLAN_TIERS: Record<string, PlanTier> = {
+  free: "free",
+  pro: "plus",
+  max: "premium",
+  team: "team",
+  enterprise: "enterprise",
+};
+
+const PLAN_TIER_ICONS: Record<PlanTier, Icon> = {
+  free: Icon.Circle,
+  plus: Icon.Star,
+  premium: Icon.Rocket,
+  team: Icon.TwoPeople,
+  enterprise: Icon.Building,
+  edu: Icon.Book,
+};
+
+function getPlanIcon(provider: Account["provider"], plan: string | null | undefined): Icon {
+  const normalized = plan?.toLowerCase().trim() ?? "";
+  const tier = (provider === "claude" ? CLAUDE_PLAN_TIERS : CODEX_PLAN_TIERS)[normalized];
+
+  return tier ? PLAN_TIER_ICONS[tier] : Icon.Star;
 }
 
 function formatTimeRemainingTag(date: string): string {
