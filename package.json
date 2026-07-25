@@ -1,8 +1,8 @@
 {
   "$schema": "https://www.raycast.com/schemas/extension.json",
-  "name": "raycast-codex-usage",
-  "title": "Codex Usage",
-  "description": "Enables you to see your weekly and monthly usage limits for Codex through Raycast",
+  "name": "raycast-ai-usage",
+  "title": "AI Usage",
+  "description": "See your Codex and Claude Code usage limits across every account, from Raycast",
   "icon": "extension-icon.png",
   "author": "TechSupportz",
   "platforms": [
@@ -14,10 +14,29 @@
   "license": "MIT",
   "commands": [
     {
-      "name": "view-codex-usage",
-      "title": "View Codex Usage",
-      "description": "View Codex usage limits",
+      "name": "view-usage",
+      "title": "View AI Usage",
+      "description": "View Codex and Claude Code usage limits",
       "mode": "view"
+    }
+  ],
+  "preferences": [
+    {
+      "name": "codexAccountPaths",
+      "title": "Codex Account Paths",
+      "description": "Comma-separated CODEX_HOME directories, one per account. Use Label=path to name an account explicitly, for example: ~/.codex, Work=~/.codex-work",
+      "type": "textfield",
+      "required": false,
+      "default": "~/.codex"
+    },
+    {
+      "name": "showClaudeCode",
+      "title": "Claude Code",
+      "label": "Show Claude Code limits",
+      "description": "Read Claude Code usage from its stored credentials",
+      "type": "checkbox",
+      "required": false,
+      "default": true
     }
   ],
   "dependencies": {
