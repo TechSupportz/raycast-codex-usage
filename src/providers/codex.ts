@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
+import { buildCliPath, resolveExecutable } from "./cli";
 import { isRecord, type Account, type ResetCredit, type ResetCreditsResponse, type UsageWindow } from "./types";
 import { parseResetExpiry } from "../reset-expiry";
 
@@ -10,6 +11,7 @@ const HTTP_TIMEOUT_MS = 10000;
 const USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
 const RESET_CREDITS_URL = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits";
 const USER_AGENT = "raycast-ai-usage";
+const CODEX_EXTRA_PATHS = [join(homedir(), ".local/bin"), join(homedir(), ".npm-global/bin")];
 
 const CODEX_EXECUTABLE_CANDIDATES = [
   "/opt/homebrew/bin/codex",
@@ -116,8 +118,8 @@ export async function fetchCodexAccount(config: CodexAccountConfig): Promise<Acc
 /** Spawns `codex app-server` under the given CODEX_HOME purely to get a fresh token. */
 function readAuthToken(codexHome: string): Promise<string> {
   return new Promise((resolve, reject) => {
-    const child = spawn(resolveCodexExecutable(), ["app-server"], {
-      env: { ...process.env, CODEX_HOME: codexHome, PATH: getExtendedPath() },
+    const child = spawn(resolveExecutable(CODEX_EXECUTABLE_CANDIDATES, "codex"), ["app-server"], {
+      env: { ...process.env, CODEX_HOME: codexHome, PATH: buildCliPath(CODEX_EXTRA_PATHS) },
       stdio: ["pipe", "pipe", "pipe"],
     });
 
@@ -347,30 +349,6 @@ function getChatGptAccountId(token: string): string | null {
   } catch {
     return null;
   }
-}
-
-function resolveCodexExecutable(): string {
-  for (const candidate of CODEX_EXECUTABLE_CANDIDATES) {
-    if (candidate !== "codex" && existsSync(candidate)) {
-      return candidate;
-    }
-  }
-
-  return "codex";
-}
-
-function getExtendedPath(): string {
-  return [
-    process.env.PATH,
-    "/opt/homebrew/bin",
-    "/usr/local/bin",
-    "/usr/bin",
-    "/bin",
-    join(homedir(), ".local/bin"),
-    join(homedir(), ".npm-global/bin"),
-  ]
-    .filter(Boolean)
-    .join(":");
 }
 
 function formatStderr(stderr: string): string {

@@ -1,4 +1,4 @@
-import { getPreferenceValues, type Image } from "@raycast/api";
+import { type Image } from "@raycast/api";
 import type { ProviderId } from "./types";
 
 type Branding = {
@@ -13,20 +13,9 @@ type Branding = {
   skeletonWindows: string[];
 };
 
-type IconPreferences = {
-  codexIcon?: string;
-  claudeIcon?: string;
-};
-
-const ICON_PREFERENCE: Record<ProviderId, keyof IconPreferences> = {
-  codex: "codexIcon",
-  claude: "claudeIcon",
-};
-
 /**
  * `claude.svg` is the official mark from Simple Icons (CC0); Simple Icons has no
- * OpenAI mark, so `codex.svg` ships as a stand-in. Either can be overridden per
- * provider from the extension's preferences.
+ * OpenAI mark, so `codex.svg` ships as a stand-in.
  */
 const BRANDING: Record<ProviderId, Branding> = {
   codex: {
@@ -42,10 +31,5 @@ const BRANDING: Record<ProviderId, Branding> = {
 };
 
 export function getBranding(provider: ProviderId): Branding {
-  const branding = BRANDING[provider];
-  const override = getPreferenceValues<IconPreferences>()[ICON_PREFERENCE[provider]]?.trim();
-
-  // A file preference hands us an absolute path, which `source` accepts the
-  // same way it accepts a bundled asset name.
-  return override ? { ...branding, icon: override } : branding;
+  return BRANDING[provider];
 }

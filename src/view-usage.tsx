@@ -1,13 +1,13 @@
-import { Action, ActionPanel, Color, Icon, List, openExtensionPreferences } from "@raycast/api";
+import { Action, ActionPanel, Color, Form, Icon, List, openExtensionPreferences, useNavigation } from "@raycast/api";
 import { Fragment, useState, type ReactElement } from "react";
 import { getProgressIcon } from "@raycast/utils";
 import { useAccounts, type AccountState } from "./use-accounts";
 import { formatResetTimeRemaining, parseResetExpiry } from "./reset-expiry";
 import { getBranding } from "./providers/branding";
-import type { Account, ResetCredit, ResetCreditsResponse, UsageWindow } from "./providers/types";
+import type { Account, AccountFailure, ResetCredit, ResetCreditsResponse, UsageWindow } from "./providers/types";
 
 export default function Command() {
-  const { states, isLoading, refresh, initialSelectedId } = useAccounts();
+  const { states, isLoading, refresh, rename, initialSelectedId } = useAccounts();
   // Controlled from the first render onwards, so nothing re-selects a row as
   // the accounts stream in one by one.
   const [selectedId, setSelectedId] = useState<string | undefined>(initialSelectedId);
@@ -37,13 +37,21 @@ export default function Command() {
         />
       ) : null}
       {states.map((state) => (
-        <AccountItem key={state.config.id} state={state} refreshAction={refreshAction} />
+        <AccountItem key={state.config.id} state={state} refreshAction={refreshAction} onRename={rename} />
       ))}
     </List>
   );
 }
 
-function AccountItem({ state, refreshAction }: { state: AccountState; refreshAction: ReactElement }) {
+function AccountItem({
+  state,
+  refreshAction,
+  onRename,
+}: {
+  state: AccountState;
+  refreshAction: ReactElement;
+  onRename: RenameHandler;
+}) {
   const { config, account, isStale } = state;
   const branding = getBranding(config.provider);
   const resets = account?.resets ? getAvailableResets(account.resets) : [];
@@ -54,11 +62,17 @@ function AccountItem({ state, refreshAction }: { state: AccountState; refreshAct
       icon={{ source: branding.icon, tintColor: getBrandTint(account) }}
       title={config.label}
       keywords={[branding.name, account?.email ?? "", formatPlan(account?.plan ?? null) ?? ""]}
-      accessories={getAccessories(account, isStale)}
+      accessories={getAccessories(account, isStale, state.refreshError)}
       detail={<AccountDetail state={state} resets={resets} />}
       actions={
         <ActionPanel>
           {refreshAction}
+          <Action.Push
+            title="Rename Account"
+            icon={Icon.Pencil}
+            shortcut={{ modifiers: ["cmd"], key: "e" }}
+            target={<RenameForm state={state} onRename={onRename} />}
+          />
           {account?.email ? (
             <Action.CopyToClipboard title="Copy Account Email" content={account.email} icon={Icon.Envelope} />
           ) : null}
@@ -69,11 +83,56 @@ function AccountItem({ state, refreshAction }: { state: AccountState; refreshAct
   );
 }
 
+type RenameHandler = (id: string, name: string) => Promise<void>;
+
+/**
+ * Renames an account for display only - nothing here touches the CODEX_HOME it
+ * reads from. Submitting an empty field restores the configured label, which is
+ * either the `Label=path` from preferences or the one derived from the folder.
+ */
+function RenameForm({ state, onRename }: { state: AccountState; onRename: RenameHandler }) {
+  const { pop } = useNavigation();
+  const [name, setName] = useState(state.config.label);
+
+  return (
+    <Form
+      navigationTitle={`Rename ${state.config.label}`}
+      actions={
+        <ActionPanel>
+          <Action.SubmitForm
+            title="Save Name"
+            icon={Icon.Check}
+            onSubmit={async () => {
+              await onRename(state.config.id, name);
+              pop();
+            }}
+          />
+        </ActionPanel>
+      }
+    >
+      <Form.TextField
+        id="name"
+        title="Name"
+        placeholder={state.configuredLabel}
+        info="Shown in the list instead of the configured label. Leave empty to go back to the default."
+        value={name}
+        onChange={setName}
+      />
+      <Form.Description title="Provider" text={getBranding(state.config.provider).name} />
+      {state.account?.email ? <Form.Description title="Account" text={state.account.email} /> : null}
+    </Form>
+  );
+}
+
 /**
  * The list is narrow in detail mode, so the accessory carries only the single
  * most-constrained window - enough to triage without opening each account.
  */
-function getAccessories(account: Account | null, isStale: boolean): List.Item.Accessory[] {
+function getAccessories(
+  account: Account | null,
+  isStale: boolean,
+  refreshError: AccountFailure | null,
+): List.Item.Accessory[] {
   if (account === null) {
     return [{ tag: { value: "…", color: Color.SecondaryText } }];
   }
@@ -112,87 +171,147 @@ function getAccessories(account: Account | null, isStale: boolean): List.Item.Ac
     });
   }
 
+  if (refreshError) {
+    accessories.unshift({
+      icon: { source: Icon.Warning, tintColor: Color.Orange },
+      tooltip: `Could not refresh: ${refreshError.message}`,
+    });
+  }
+
   return accessories;
 }
 
+/**
+ * The pane reads as a stack of small blocks - one per usage window, then the
+ * account itself, its banked resets, and when we last looked - with a rule
+ * between each. Empty blocks drop out rather than leaving a rule behind.
+ */
 function AccountDetail({ state, resets }: { state: AccountState; resets: ResetCredit[] }) {
-  const { config, account } = state;
-  const branding = getBranding(config.provider);
+  const sections = [
+    ...buildWindowSections(state),
+    buildAccountRows(state),
+    buildResetRows(resets),
+    buildMetaRows(state),
+  ]
+    .filter((rows) => rows.length > 0)
+    .map((rows, index) => (
+      <Fragment key={index}>
+        {index > 0 ? <List.Item.Detail.Metadata.Separator /> : null}
+        {rows}
+      </Fragment>
+    ));
 
   return (
     <List.Item.Detail
       markdown={buildMarkdown(state)}
-      metadata={
-        <List.Item.Detail.Metadata>
-          <WindowRows state={state} />
-          {account && !account.failure && account.windows.length > 0 ? <List.Item.Detail.Metadata.Separator /> : null}
-          <List.Item.Detail.Metadata.Label title="Provider" text={branding.name} icon={{ source: branding.icon }} />
-          {account?.plan && formatPlan(account.plan) ? (
-            <List.Item.Detail.Metadata.Label title="Plan" text={formatPlan(account.plan) ?? ""} icon={Icon.Star} />
-          ) : null}
-          {account?.email ? (
-            <List.Item.Detail.Metadata.Label title="Account" text={account.email} icon={Icon.Person} />
-          ) : null}
-          <ResetRows credits={resets} />
-        </List.Item.Detail.Metadata>
-      }
+      metadata={<List.Item.Detail.Metadata>{sections}</List.Item.Detail.Metadata>}
     />
   );
 }
 
 /**
- * One tag row per window, plus the reset time beneath it. While an account is
- * still loading we list the windows this provider usually returns, so the pane
- * keeps its shape instead of jumping when the real response lands.
+ * One block per window: how much is left, and when it comes back. While an
+ * account is still loading we list the windows this provider usually returns,
+ * so the pane keeps its shape instead of jumping when the real response lands.
  */
-function WindowRows({ state: { config, account } }: { state: AccountState }) {
+function buildWindowSections({ config, account }: AccountState): ReactElement[][] {
   if (account === null) {
-    return (
-      <>
-        {getBranding(config.provider).skeletonWindows.map((label) => (
-          <List.Item.Detail.Metadata.TagList key={label} title={label}>
-            <List.Item.Detail.Metadata.TagList.Item text="Checking…" color={Color.SecondaryText} />
-          </List.Item.Detail.Metadata.TagList>
-        ))}
-      </>
-    );
+    return getBranding(config.provider).skeletonWindows.map((label) => [
+      <List.Item.Detail.Metadata.TagList key={label} title={label}>
+        <List.Item.Detail.Metadata.TagList.Item text="Checking…" color={Color.SecondaryText} />
+      </List.Item.Detail.Metadata.TagList>,
+    ]);
   }
 
   if (account.failure) {
-    return (
-      <List.Item.Detail.Metadata.TagList title="Status">
+    return [
+      [
+        <List.Item.Detail.Metadata.TagList key="status" title="Status">
+          <List.Item.Detail.Metadata.TagList.Item
+            text={account.failure.kind === "expired" ? "Signed Out" : "Unavailable"}
+            color={account.failure.kind === "expired" ? Color.Yellow : Color.Red}
+          />
+        </List.Item.Detail.Metadata.TagList>,
+      ],
+    ];
+  }
+
+  return account.windows.map((window) => {
+    const remaining = getRemaining(window);
+    const rows = [
+      <List.Item.Detail.Metadata.TagList key={window.id} title={window.label}>
         <List.Item.Detail.Metadata.TagList.Item
-          text={account.failure.kind === "expired" ? "Signed Out" : "Unavailable"}
-          color={account.failure.kind === "expired" ? Color.Yellow : Color.Red}
+          text={`${formatPercent(remaining)}% left`}
+          color={getRemainingColor(remaining)}
         />
-      </List.Item.Detail.Metadata.TagList>
+      </List.Item.Detail.Metadata.TagList>,
+    ];
+
+    if (window.resetsAt) {
+      rows.push(
+        <List.Item.Detail.Metadata.Label
+          key={`${window.id}-resets`}
+          title="Resets"
+          text={`in ${formatTimeUntil(window.resetsAt)} · ${formatResetDate(window.resetsAt)}`}
+        />,
+      );
+    }
+
+    return rows;
+  });
+}
+
+/** Who this account is: the product, the plan it is on, and the signed-in address. */
+function buildAccountRows({ config, account }: AccountState): ReactElement[] {
+  const branding = getBranding(config.provider);
+  const plan = formatPlan(account?.plan ?? null);
+  const rows = [
+    <List.Item.Detail.Metadata.Label
+      key="provider"
+      title="Provider"
+      text={branding.name}
+      icon={{ source: branding.icon }}
+    />,
+  ];
+
+  if (plan) {
+    rows.push(<List.Item.Detail.Metadata.Label key="plan" title="Plan" text={plan} icon={Icon.Star} />);
+  }
+
+  if (account?.email) {
+    rows.push(<List.Item.Detail.Metadata.Label key="email" title="Account" text={account.email} icon={Icon.Person} />);
+  }
+
+  return rows;
+}
+
+/** How current these numbers are, and anything that went wrong getting them. */
+function buildMetaRows({ fetchedAt, refreshError }: AccountState): ReactElement[] {
+  const rows: ReactElement[] = [];
+
+  if (fetchedAt !== null) {
+    rows.push(
+      <List.Item.Detail.Metadata.Label
+        key="updated"
+        title="Updated"
+        text={formatUpdatedAt(fetchedAt)}
+        icon={Icon.Clock}
+      />,
     );
   }
 
-  return (
-    <>
-      {account.windows.map((window) => {
-        const remaining = getRemaining(window);
+  if (refreshError) {
+    rows.push(
+      <List.Item.Detail.Metadata.Label
+        key="refresh-error"
+        title="Refresh Failed"
+        text={refreshError.message}
+        icon={{ source: Icon.Warning, tintColor: Color.Orange }}
+      />,
+    );
+  }
 
-        return (
-          <Fragment key={window.id}>
-            <List.Item.Detail.Metadata.TagList title={window.label}>
-              <List.Item.Detail.Metadata.TagList.Item
-                text={`${formatPercent(remaining)}% left`}
-                color={getRemainingColor(remaining)}
-              />
-            </List.Item.Detail.Metadata.TagList>
-            {window.resetsAt ? (
-              <List.Item.Detail.Metadata.Label
-                title="Resets"
-                text={`in ${formatTimeUntil(window.resetsAt)} · ${formatResetDate(window.resetsAt)}`}
-              />
-            ) : null}
-          </Fragment>
-        );
-      })}
-    </>
-  );
+  return rows;
 }
 
 /** Only states that need a sentence get prose; healthy accounts are metadata alone. */
@@ -212,31 +331,28 @@ function buildMarkdown({ config, account }: AccountState): string | undefined {
  * Every banked reset, soonest to expire first. They were behind a pushed view
  * when the pane was busier; there is room for them here now.
  */
-function ResetRows({ credits }: { credits: ResetCredit[] }) {
+function buildResetRows(credits: ResetCredit[]): ReactElement[] {
   if (credits.length === 0) {
-    return null;
+    return [];
   }
 
-  return (
-    <>
-      <List.Item.Detail.Metadata.Separator />
-      <List.Item.Detail.Metadata.TagList title="Usage Resets">
-        <List.Item.Detail.Metadata.TagList.Item text={`${credits.length} available`} color={Color.Blue} />
+  return [
+    <List.Item.Detail.Metadata.TagList key="available" title="Usage Resets">
+      <List.Item.Detail.Metadata.TagList.Item text={`${credits.length} available`} color={Color.Blue} />
+    </List.Item.Detail.Metadata.TagList>,
+    ...credits.map((credit, index) => (
+      <List.Item.Detail.Metadata.TagList key={credit.id} title={`Reset ${index + 1}`}>
+        <List.Item.Detail.Metadata.TagList.Item
+          text={formatExpiryDate(credit.expires_at)}
+          color={Color.SecondaryText}
+        />
+        <List.Item.Detail.Metadata.TagList.Item
+          text={formatTimeRemainingTag(credit.expires_at)}
+          color={getResetExpiryColor(credit.expires_at)}
+        />
       </List.Item.Detail.Metadata.TagList>
-      {credits.map((credit, index) => (
-        <List.Item.Detail.Metadata.TagList key={credit.id} title={`Reset ${index + 1}`}>
-          <List.Item.Detail.Metadata.TagList.Item
-            text={formatExpiryDate(credit.expires_at)}
-            color={Color.SecondaryText}
-          />
-          <List.Item.Detail.Metadata.TagList.Item
-            text={formatTimeRemainingTag(credit.expires_at)}
-            color={getResetExpiryColor(credit.expires_at)}
-          />
-        </List.Item.Detail.Metadata.TagList>
-      ))}
-    </>
-  );
+    )),
+  ];
 }
 
 function getTightestWindow(windows: UsageWindow[]): UsageWindow | null {
@@ -318,6 +434,23 @@ function formatResetDate(timestampMs: number): string {
     hour: "numeric",
     minute: "2-digit",
   }).format(new Date(timestampMs));
+}
+
+/** How long ago we last heard from the provider; cached values can be minutes old. */
+function formatUpdatedAt(timestampMs: number): string {
+  const minutes = Math.floor((Date.now() - timestampMs) / 60000);
+
+  if (minutes < 1) {
+    return "Just now";
+  }
+
+  if (minutes < 60) {
+    return `${minutes}m ago`;
+  }
+
+  const hours = Math.floor(minutes / 60);
+
+  return hours < 24 ? `${hours}h ago` : formatResetDate(timestampMs);
 }
 
 function formatTimeUntil(timestampMs: number): string {

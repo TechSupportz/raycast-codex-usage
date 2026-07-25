@@ -1,8 +1,10 @@
-import { execFile, execFileSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { execFile } from "node:child_process";
+import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import { parseClaudeUsagePayload } from "./claude-usage";
+import { buildCliPath, resolveExecutable } from "./cli";
 import { isRecord, type Account, type UsageWindow } from "./types";
 
 const execFileAsync = promisify(execFile);
@@ -15,6 +17,7 @@ const REFRESH_TIMEOUT_MS = 20000;
 const USER_AGENT = "raycast-ai-usage";
 const KEYCHAIN_SERVICE = "Claude Code-credentials";
 const CREDENTIALS_FILE = join(homedir(), ".claude/.credentials.json");
+const CLAUDE_EXTRA_PATHS = [join(homedir(), ".local/bin"), join(homedir(), ".claude/local")];
 
 const CLAUDE_EXECUTABLE_CANDIDATES = [
   join(homedir(), ".claude/local/claude"),
@@ -42,7 +45,7 @@ export async function fetchClaudeAccount(): Promise<Account> {
     failure: null,
   };
 
-  let credentials = readCredentials();
+  let credentials = await readCredentials();
 
   if (!credentials) {
     return { ...base, failure: { kind: "expired", message: "Not signed in to Claude Code. Run `claude`." } };
@@ -53,7 +56,7 @@ export async function fetchClaudeAccount(): Promise<Account> {
   // We only ever ask the CLI to refresh, then re-read what it stored.
   if (isExpired(credentials)) {
     await delegateRefresh();
-    credentials = readCredentials() ?? credentials;
+    credentials = (await readCredentials()) ?? credentials;
   }
 
   base.plan = credentials.subscriptionType;
@@ -79,33 +82,43 @@ function isExpired({ expiresAt }: Credentials): boolean {
  */
 async function delegateRefresh(): Promise<void> {
   try {
-    await execFileAsync(resolveClaudeExecutable(), ["auth", "status"], {
+    await execFileAsync(resolveExecutable(CLAUDE_EXECUTABLE_CANDIDATES, "claude"), ["auth", "status"], {
       timeout: REFRESH_TIMEOUT_MS,
-      env: { ...process.env, PATH: getExtendedPath() },
+      env: { ...process.env, PATH: buildCliPath(CLAUDE_EXTRA_PATHS) },
     });
   } catch {
     // Ignored on purpose - see above.
   }
 }
 
-function readCredentials(): Credentials | null {
-  return parseCredentials(readKeychain() ?? readCredentialsFile());
+async function readCredentials(): Promise<Credentials | null> {
+  const keychainCredentials = parseCredentials(await readKeychain());
+
+  return keychainCredentials ?? parseCredentials(await readCredentialsFile());
 }
 
-function readKeychain(): string | null {
+async function readKeychain(): Promise<string | null> {
   try {
-    return execFileSync("/usr/bin/security", ["find-generic-password", "-s", KEYCHAIN_SERVICE, "-w"], {
-      encoding: "utf8",
-      timeout: 5000,
-    });
+    const { stdout } = await execFileAsync(
+      "/usr/bin/security",
+      ["find-generic-password", "-s", KEYCHAIN_SERVICE, "-w"],
+      {
+        encoding: "utf8",
+        timeout: 5000,
+      },
+    );
+
+    return stdout;
   } catch {
     return null;
   }
 }
 
-function readCredentialsFile(): string | null {
+async function readCredentialsFile(): Promise<string | null> {
   try {
-    return existsSync(CREDENTIALS_FILE) ? readFileSync(CREDENTIALS_FILE, "utf8") : null;
+    return await readFile(CREDENTIALS_FILE, {
+      encoding: "utf8",
+    });
   } catch {
     return null;
   }
@@ -154,65 +167,5 @@ async function fetchWindows(token: string): Promise<UsageWindow[]> {
 
   const payload = await response.json();
 
-  if (!isRecord(payload) || !Array.isArray(payload.limits)) {
-    throw new Error("Claude returned an unexpected usage response.");
-  }
-
-  // The top level carries feature-flagged keys that come and go; `limits` is
-  // already normalised, so new limit kinds show up here without a code change.
-  return payload.limits.filter(isRecord).flatMap((limit) => {
-    if (typeof limit.percent !== "number" || typeof limit.kind !== "string") {
-      return [];
-    }
-
-    return [
-      {
-        id: limit.kind,
-        label: formatLimitLabel(limit.kind),
-        usedPercent: limit.percent,
-        resetsAt: typeof limit.resets_at === "string" ? Date.parse(limit.resets_at) || null : null,
-      },
-    ];
-  });
-}
-
-function formatLimitLabel(kind: string): string {
-  if (kind === "session") {
-    return "Session Limit";
-  }
-
-  if (kind === "weekly_all") {
-    return "Weekly Limit";
-  }
-
-  const label = kind
-    .split("_")
-    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-    .join(" ");
-
-  return label.endsWith("Limit") ? label : `${label} Limit`;
-}
-
-function resolveClaudeExecutable(): string {
-  for (const candidate of CLAUDE_EXECUTABLE_CANDIDATES) {
-    if (candidate !== "claude" && existsSync(candidate)) {
-      return candidate;
-    }
-  }
-
-  return "claude";
-}
-
-function getExtendedPath(): string {
-  return [
-    process.env.PATH,
-    "/opt/homebrew/bin",
-    "/usr/local/bin",
-    "/usr/bin",
-    "/bin",
-    join(homedir(), ".local/bin"),
-    join(homedir(), ".claude/local"),
-  ]
-    .filter(Boolean)
-    .join(":");
+  return parseClaudeUsagePayload(payload);
 }
