@@ -66,9 +66,14 @@ function deriveLabel(home: string): string {
   return suffix.charAt(0).toUpperCase() + suffix.slice(1);
 }
 
+export function codexAccountId(home: string): string {
+  return `codex:${home}`;
+}
+
 export async function fetchCodexAccount(config: CodexAccountConfig): Promise<Account> {
   const base: Account = {
-    id: `codex:${config.home}`,
+    id: codexAccountId(config.home),
+    provider: "codex",
     label: config.label,
     plan: null,
     email: null,

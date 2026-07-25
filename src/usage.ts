@@ -1,7 +1,7 @@
 import { getPreferenceValues } from "@raycast/api";
-import { fetchClaudeAccount } from "./providers/claude";
-import { fetchCodexAccount, parseAccountPaths } from "./providers/codex";
-import type { Account } from "./providers/types";
+import { CLAUDE_ACCOUNT_ID, fetchClaudeAccount } from "./providers/claude";
+import { codexAccountId, fetchCodexAccount, parseAccountPaths } from "./providers/codex";
+import type { Account, ProviderId } from "./providers/types";
 
 type Preferences = {
   codexAccountPaths: string;
@@ -9,18 +9,35 @@ type Preferences = {
 };
 
 /**
- * Fetches every configured account in parallel. Providers resolve rather than
- * reject, so one broken account never blanks the whole list.
+ * Everything we know about an account before talking to the network, which is
+ * enough to draw the list. The view renders these immediately and fills each
+ * one in as its `fetch` resolves.
  */
-export async function fetchAllAccounts(): Promise<Account[]> {
-  const { codexAccountPaths, showClaudeCode } = getPreferenceValues<Preferences>();
-  const codexAccounts = parseAccountPaths(codexAccountPaths ?? "");
+export type ConfiguredAccount = {
+  id: string;
+  provider: ProviderId;
+  label: string;
+  fetch: () => Promise<Account>;
+};
 
-  const pending: Promise<Account>[] = codexAccounts.map(fetchCodexAccount);
+export function getConfiguredAccounts(): ConfiguredAccount[] {
+  const { codexAccountPaths, showClaudeCode } = getPreferenceValues<Preferences>();
+
+  const accounts: ConfiguredAccount[] = parseAccountPaths(codexAccountPaths ?? "").map((config) => ({
+    id: codexAccountId(config.home),
+    provider: "codex",
+    label: config.label,
+    fetch: () => fetchCodexAccount(config),
+  }));
 
   if (showClaudeCode) {
-    pending.push(fetchClaudeAccount());
+    accounts.push({
+      id: CLAUDE_ACCOUNT_ID,
+      provider: "claude",
+      label: "Claude Code",
+      fetch: fetchClaudeAccount,
+    });
   }
 
-  return Promise.all(pending);
+  return accounts;
 }

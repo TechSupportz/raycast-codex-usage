@@ -31,8 +31,11 @@ export type AccountFailure = {
   message: string;
 };
 
+export type ProviderId = "codex" | "claude";
+
 export type Account = {
   id: string;
+  provider: ProviderId;
   /** Short name shown in the section header, e.g. "Personal". */
   label: string;
   /** Plan as the provider reports it, e.g. "plus", "education", "pro". */

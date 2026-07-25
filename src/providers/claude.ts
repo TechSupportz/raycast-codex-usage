@@ -7,6 +7,8 @@ import { isRecord, type Account, type UsageWindow } from "./types";
 
 const execFileAsync = promisify(execFile);
 
+export const CLAUDE_ACCOUNT_ID = "claude";
+
 const USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
 const HTTP_TIMEOUT_MS = 10000;
 const REFRESH_TIMEOUT_MS = 20000;
@@ -30,7 +32,8 @@ type Credentials = {
 
 export async function fetchClaudeAccount(): Promise<Account> {
   const base: Account = {
-    id: "claude",
+    id: CLAUDE_ACCOUNT_ID,
+    provider: "claude",
     label: "Claude Code",
     plan: null,
     email: null,

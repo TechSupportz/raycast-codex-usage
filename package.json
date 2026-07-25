@@ -30,6 +30,20 @@
       "default": "~/.codex"
     },
     {
+      "name": "codexIcon",
+      "title": "Codex Icon",
+      "description": "Optional SVG or PNG shown for Codex accounts. Leave empty to use the bundled mark.",
+      "type": "file",
+      "required": false
+    },
+    {
+      "name": "claudeIcon",
+      "title": "Claude Code Icon",
+      "description": "Optional SVG or PNG shown for Claude Code. Leave empty to use the bundled mark.",
+      "type": "file",
+      "required": false
+    },
+    {
       "name": "showClaudeCode",
       "title": "Claude Code",
       "label": "Show Claude Code limits",
