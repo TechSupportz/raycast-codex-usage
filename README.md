@@ -30,7 +30,7 @@ Account names are derived from the directory (`~/.codex` becomes "Personal", `~/
 
 ## Credentials
 
-The extension never performs an OAuth token refresh itself. Both CLIs rotate their refresh tokens, so refreshing one behind its back would invalidate the copy it holds and force you to sign in again. Instead, this extension reads whatever token the CLI currently has and asks that CLI to refresh when the token has expired. If a refresh does not happen, the account is shown as signed out with a hint to run the CLI.
+Codex token refresh is delegated to the Codex CLI. Claude Code is refreshed directly using its stored OAuth refresh token, without making an inference request. The extension coordinates with Claude Code's refresh lock, re-reads credentials after acquiring it, and saves rotated credentials back to the same source before using them.
 
 Claude Code credentials are read from the macOS Keychain, falling back to `~/.claude/.credentials.json`.
 

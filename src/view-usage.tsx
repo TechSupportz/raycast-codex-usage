@@ -1,4 +1,14 @@
-import { Action, ActionPanel, Color, Form, Icon, List, openExtensionPreferences, useNavigation } from "@raycast/api";
+import {
+  Action,
+  ActionPanel,
+  Color,
+  Form,
+  Icon,
+  List,
+  openExtensionPreferences,
+  showToast,
+  useNavigation,
+} from "@raycast/api";
 import { Fragment, useState, type ReactElement } from "react";
 import { getProgressIcon } from "@raycast/utils";
 import { useAccounts, type AccountState } from "./use-accounts";
@@ -159,7 +169,6 @@ function getAccessories(
   const accessories: List.Item.Accessory[] = [
     {
       icon: getProgressIcon(remaining / 100, getRemainingColor(remaining)),
-      tag: { value: `${formatPercent(remaining)}%`, color: getRemainingColor(remaining) },
       tooltip: `${tightest.label}: ${formatPercent(remaining)}% left`,
     },
   ];
@@ -238,26 +247,29 @@ function buildWindowSections({ config, account }: AccountState): ReactElement[][
 
   return account.windows.map((window) => {
     const remaining = getRemaining(window);
-    const rows = [
+    const resetsAt = window.resetsAt;
+
+    return [
       <List.Item.Detail.Metadata.TagList key={window.id} title={window.label}>
         <List.Item.Detail.Metadata.TagList.Item
           text={`${formatPercent(remaining)}% left`}
+          icon={getProgressIcon(remaining / 100, getRemainingColor(remaining))}
           color={getRemainingColor(remaining)}
         />
+        {resetsAt ? (
+          <List.Item.Detail.Metadata.TagList.Item
+            text={`in ${formatTimeUntil(resetsAt)}`}
+            color={Color.SecondaryText}
+            onAction={() => {
+              void showToast({
+                title: `${window.label} resets`,
+                message: formatFullResetDate(resetsAt),
+              });
+            }}
+          />
+        ) : null}
       </List.Item.Detail.Metadata.TagList>,
     ];
-
-    if (window.resetsAt) {
-      rows.push(
-        <List.Item.Detail.Metadata.Label
-          key={`${window.id}-resets`}
-          title="Resets"
-          text={`in ${formatTimeUntil(window.resetsAt)} · ${formatResetDate(window.resetsAt)}`}
-        />,
-      );
-    }
-
-    return rows;
   });
 }
 
@@ -484,6 +496,18 @@ function formatResetDate(timestampMs: number): string {
     month: "short",
     hour: "numeric",
     minute: "2-digit",
+  }).format(new Date(timestampMs));
+}
+
+function formatFullResetDate(timestampMs: number): string {
+  return new Intl.DateTimeFormat(undefined, {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    timeZoneName: "short",
   }).format(new Date(timestampMs));
 }
 
