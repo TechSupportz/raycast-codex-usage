@@ -5,6 +5,7 @@ import {
   Form,
   Icon,
   List,
+  Toast,
   openExtensionPreferences,
   showToast,
   useNavigation,
@@ -14,6 +15,7 @@ import { getProgressIcon } from "@raycast/utils";
 import { useAccounts, type AccountState } from "./use-accounts";
 import { formatResetTimeRemaining, parseResetExpiry } from "./reset-expiry";
 import { getBranding } from "./providers/branding";
+import { switchCodexAccount } from "./providers/codex";
 import type { Account, AccountFailure, ResetCredit, ResetCreditsResponse, UsageWindow } from "./providers/types";
 
 export default function Command() {
@@ -38,7 +40,7 @@ export default function Command() {
         <List.EmptyView
           icon={Icon.Gauge}
           title="No Accounts Configured"
-          description="Add a Codex home directory, or turn on Claude Code, in this extension's preferences."
+          description="Add an account with codex-auth, or turn on Claude Code in this extension's preferences."
           actions={
             <ActionPanel>
               <Action title="Open Preferences" icon={Icon.Gear} onAction={openExtensionPreferences} />
@@ -47,7 +49,13 @@ export default function Command() {
         />
       ) : null}
       {states.map((state) => (
-        <AccountItem key={state.config.id} state={state} refreshAction={refreshAction} onRename={rename} />
+        <AccountItem
+          key={state.config.id}
+          state={state}
+          refreshAction={refreshAction}
+          onRefresh={refresh}
+          onRename={rename}
+        />
       ))}
     </List>
   );
@@ -56,15 +64,19 @@ export default function Command() {
 function AccountItem({
   state,
   refreshAction,
+  onRefresh,
   onRename,
 }: {
   state: AccountState;
   refreshAction: ReactElement;
+  onRefresh: () => void;
   onRename: RenameHandler;
 }) {
   const { config, account, isStale } = state;
   const branding = getBranding(config.provider);
   const resets = account?.resets ? getAvailableResets(account.resets) : [];
+  // Hoisted so the guard below still narrows it inside the async handler.
+  const switchQuery = account?.switchQuery;
 
   return (
     <List.Item
@@ -73,9 +85,39 @@ function AccountItem({
       title={config.label}
       keywords={[branding.name, account?.email ?? "", formatPlan(account?.plan ?? null) ?? ""]}
       accessories={getAccessories(account, isStale, state.refreshError)}
-      detail={<AccountDetail state={state} resets={resets} />}
+      detail={<AccountDetail state={state} resets={resets} resetCount={account?.resets?.available_count ?? null} />}
       actions={
         <ActionPanel>
+          {config.provider === "codex" && account?.email && switchQuery && !account.isCurrent ? (
+            <Action
+              title="Switch to This Account"
+              icon={Icon.Switch}
+              onAction={async () => {
+                const toast = await showToast({
+                  style: Toast.Style.Animated,
+                  title: `Switching to ${account.email}`,
+                });
+
+                try {
+                  await switchCodexAccount(switchQuery, account.id);
+                  onRefresh();
+                  toast.style = Toast.Style.Success;
+                  toast.title = `Switched to ${account.email}`;
+                } catch (error) {
+                  toast.style = Toast.Style.Failure;
+                  toast.title = "Could Not Switch Account";
+                  toast.message = error instanceof Error ? error.message : String(error);
+                }
+              }}
+            />
+          ) : null}
+          {account?.id === "codex-auth:unavailable" ? (
+            <Action.CopyToClipboard
+              title="Copy Codex-Auth Install Command"
+              icon={Icon.Download}
+              content="npm install -g @loongphy/codex-auth"
+            />
+          ) : null}
           {refreshAction}
           <Action.Push
             title="Rename Account"
@@ -96,9 +138,8 @@ function AccountItem({
 type RenameHandler = (id: string, name: string) => Promise<void>;
 
 /**
- * Renames an account for display only - nothing here touches the CODEX_HOME it
- * reads from. Submitting an empty field restores the configured label, which is
- * either the `Label=path` from preferences or the one derived from the folder.
+ * Renames an account for display only; codex-auth continues to own its
+ * credentials. Submitting an empty field restores the account email.
  */
 function RenameForm({ state, onRename }: { state: AccountState; onRename: RenameHandler }) {
   const { pop } = useNavigation();
@@ -160,18 +201,22 @@ function getAccessories(
   }
 
   const tightest = getTightestWindow(account.windows);
+  const accessories: List.Item.Accessory[] = [];
 
-  if (!tightest) {
-    return [];
-  }
-
-  const remaining = getRemaining(tightest);
-  const accessories: List.Item.Accessory[] = [
-    {
+  if (tightest) {
+    const remaining = getRemaining(tightest);
+    accessories.push({
       icon: getProgressIcon(remaining / 100, getRemainingColor(remaining)),
       tooltip: `${tightest.label}: ${formatPercent(remaining)}% left`,
-    },
-  ];
+    });
+  }
+
+  if (account.isCurrent) {
+    accessories.unshift({
+      icon: { source: Icon.CheckCircle, tintColor: Color.Blue },
+      tooltip: "Active Codex account",
+    });
+  }
 
   if (isStale) {
     accessories.unshift({
@@ -195,11 +240,19 @@ function getAccessories(
  * account itself, its banked resets, and when we last looked - with a rule
  * between each. Empty blocks drop out rather than leaving a rule behind.
  */
-function AccountDetail({ state, resets }: { state: AccountState; resets: ResetCredit[] }) {
+function AccountDetail({
+  state,
+  resets,
+  resetCount,
+}: {
+  state: AccountState;
+  resets: ResetCredit[];
+  resetCount: number | null;
+}) {
   const sections = [
     ...buildWindowSections(state),
     buildAccountRows(state),
-    buildResetRows(resets),
+    buildResetRows(resets, resetCount),
     buildMetaRows(state),
   ]
     .filter((rows) => rows.length > 0)
@@ -350,14 +403,14 @@ function buildMarkdown({ config, account }: AccountState): string | undefined {
  * Every banked reset, soonest to expire first. They were behind a pushed view
  * when the pane was busier; there is room for them here now.
  */
-function buildResetRows(credits: ResetCredit[]): ReactElement[] {
-  if (credits.length === 0) {
+function buildResetRows(credits: ResetCredit[], availableCount: number | null): ReactElement[] {
+  if (availableCount === null) {
     return [];
   }
 
   return [
     <List.Item.Detail.Metadata.TagList key="available" title="Usage Resets">
-      <List.Item.Detail.Metadata.TagList.Item text={`${credits.length} available`} color={Color.Blue} />
+      <List.Item.Detail.Metadata.TagList.Item text={`${availableCount} available`} color={Color.Blue} />
     </List.Item.Detail.Metadata.TagList>,
     ...credits.map((credit, index) => (
       <List.Item.Detail.Metadata.TagList key={credit.id} title={`Reset ${index + 1}`}>

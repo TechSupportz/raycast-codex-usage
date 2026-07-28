@@ -22,14 +22,6 @@
   ],
   "preferences": [
     {
-      "name": "codexAccountPaths",
-      "title": "Codex Account Paths",
-      "description": "Comma-separated CODEX_HOME directories, one per account. Use Label=path to name an account explicitly, for example: ~/.codex, Work=~/.codex-work",
-      "type": "textfield",
-      "required": false,
-      "default": "~/.codex"
-    },
-    {
       "name": "showClaudeCode",
       "title": "Claude Code",
       "label": "Show Claude Code limits",

@@ -45,6 +45,10 @@ export type Account = {
   /** Codex only; null when the provider has no concept of banked resets. */
   resets: ResetCreditsResponse | null;
   failure: AccountFailure | null;
+  /** Present for providers that can identify the credential currently in use. */
+  isCurrent?: boolean;
+  /** Provider-specific selector used by an account-switch action. */
+  switchQuery?: string;
 };
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
