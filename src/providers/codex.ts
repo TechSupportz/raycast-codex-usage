@@ -88,7 +88,9 @@ export async function switchCodexAccount(query: string, expectedId: string): Pro
     }
 
     try {
-      await execFileAsync("/usr/bin/open", ["-b", "com.openai.codex"]);
+      // -g relaunches Codex without pulling focus, which would otherwise
+      // dismiss the Raycast window mid-switch.
+      await execFileAsync("/usr/bin/open", ["-g", "-b", "com.openai.codex"]);
     } catch {
       throw new Error("Account switched, but Codex could not reopen. Reopen it manually.");
     }

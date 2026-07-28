@@ -1,13 +1,9 @@
 import { getPreferenceValues } from "@raycast/api";
 import { CLAUDE_ACCOUNT_ID, fetchClaudeAccount } from "./providers/claude";
 import { fetchCodexAccount, getCodexAccounts } from "./providers/codex";
-import { codexHomeAccountId, fetchCodexHomeAccount } from "./providers/codex-home";
-import { parseCodexHomePaths } from "./providers/codex-home-paths";
 import type { Account, ProviderId } from "./providers/types";
 
 type Preferences = {
-  codexSource: "codex-auth" | "codex-home";
-  codexAccountPaths: string;
   showClaudeCode: boolean;
 };
 
@@ -40,24 +36,15 @@ export type ConfiguredAccount = {
 };
 
 export function getConfiguredAccounts(): ConfiguredAccount[] {
-  const { codexSource, codexAccountPaths, showClaudeCode } = getPreferenceValues<Preferences>();
+  const { showClaudeCode } = getPreferenceValues<Preferences>();
 
-  const accounts: ConfiguredAccount[] =
-    codexSource === "codex-home"
-      ? parseCodexHomePaths(codexAccountPaths).map((config) => ({
-          id: codexHomeAccountId(config.home),
-          provider: "codex",
-          label: config.label,
-          refreshIntervalMs: REFRESH_INTERVAL_MS.codex,
-          fetch: () => fetchCodexHomeAccount(config),
-        }))
-      : getCodexAccounts().map((account) => ({
-          id: account.id,
-          provider: "codex",
-          label: account.email ?? account.label,
-          refreshIntervalMs: REFRESH_INTERVAL_MS.codex,
-          fetch: account.failure ? async () => account : () => fetchCodexAccount(account.id),
-        }));
+  const accounts: ConfiguredAccount[] = getCodexAccounts().map((account) => ({
+    id: account.id,
+    provider: "codex",
+    label: account.email ?? account.label,
+    refreshIntervalMs: REFRESH_INTERVAL_MS.codex,
+    fetch: account.failure ? async () => account : () => fetchCodexAccount(account.id),
+  }));
 
   if (showClaudeCode) {
     accounts.push({

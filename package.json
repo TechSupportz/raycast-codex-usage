@@ -22,32 +22,6 @@
   ],
   "preferences": [
     {
-      "name": "codexSource",
-      "title": "Codex Account Source",
-      "description": "Choose one source. Accounts from the other source are ignored.",
-      "type": "dropdown",
-      "required": true,
-      "default": "codex-home",
-      "data": [
-        {
-          "title": "CODEX_HOME — configured directories",
-          "value": "codex-home"
-        },
-        {
-          "title": "codex-auth — all managed accounts",
-          "value": "codex-auth"
-        }
-      ]
-    },
-    {
-      "name": "codexAccountPaths",
-      "title": "CODEX_HOME Paths",
-      "description": "Used only when Codex Account Source is CODEX_HOME. Comma-separated; Label=path supported.",
-      "type": "textfield",
-      "required": false,
-      "default": "~/.codex"
-    },
-    {
       "name": "showClaudeCode",
       "title": "Claude Code",
       "label": "Show Claude Code limits",

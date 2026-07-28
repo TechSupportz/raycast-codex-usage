@@ -40,7 +40,7 @@ export default function Command() {
         <List.EmptyView
           icon={Icon.Gauge}
           title="No Accounts Configured"
-          description="Check the selected Codex account source, or turn on Claude Code, in this extension's preferences."
+          description="Add an account with codex-auth, or turn on Claude Code in this extension's preferences."
           actions={
             <ActionPanel>
               <Action title="Open Preferences" icon={Icon.Gear} onAction={openExtensionPreferences} />
@@ -75,6 +75,8 @@ function AccountItem({
   const { config, account, isStale } = state;
   const branding = getBranding(config.provider);
   const resets = account?.resets ? getAvailableResets(account.resets) : [];
+  // Hoisted so the guard below still narrows it inside the async handler.
+  const switchQuery = account?.switchQuery;
 
   return (
     <List.Item
@@ -86,7 +88,7 @@ function AccountItem({
       detail={<AccountDetail state={state} resets={resets} resetCount={account?.resets?.available_count ?? null} />}
       actions={
         <ActionPanel>
-          {config.provider === "codex" && account?.email && account.switchQuery && !account.isCurrent ? (
+          {config.provider === "codex" && account?.email && switchQuery && !account.isCurrent ? (
             <Action
               title="Switch to This Account"
               icon={Icon.Switch}
@@ -97,7 +99,7 @@ function AccountItem({
                 });
 
                 try {
-                  await switchCodexAccount(account.switchQuery, account.id);
+                  await switchCodexAccount(switchQuery, account.id);
                   onRefresh();
                   toast.style = Toast.Style.Success;
                   toast.title = `Switched to ${account.email}`;
@@ -136,9 +138,8 @@ function AccountItem({
 type RenameHandler = (id: string, name: string) => Promise<void>;
 
 /**
- * Renames an account for display only - nothing here touches the CODEX_HOME it
- * reads from. Submitting an empty field restores the configured label, which is
- * either the `Label=path` from preferences or the one derived from the folder.
+ * Renames an account for display only; codex-auth continues to own its
+ * credentials. Submitting an empty field restores the account email.
  */
 function RenameForm({ state, onRename }: { state: AccountState; onRename: RenameHandler }) {
   const { pop } = useNavigation();
@@ -212,8 +213,8 @@ function getAccessories(
 
   if (account.isCurrent) {
     accessories.unshift({
-      icon: { source: Icon.CheckCircle, tintColor: Color.Green },
-      tooltip: "Current account",
+      icon: { source: Icon.CheckCircle, tintColor: Color.Blue },
+      tooltip: "Active Codex account",
     });
   }
 
@@ -351,6 +352,14 @@ function buildAccountRows({ config, account }: AccountState): ReactElement[] {
 
   if (account?.email) {
     rows.push(<List.Item.Detail.Metadata.Label key="email" title="Account" text={account.email} icon={Icon.Person} />);
+  }
+
+  if (account?.isCurrent) {
+    rows.push(
+      <List.Item.Detail.Metadata.TagList key="active" title="Status">
+        <List.Item.Detail.Metadata.TagList.Item text="Active" color={Color.Blue} icon={Icon.CheckCircle} />
+      </List.Item.Detail.Metadata.TagList>,
+    );
   }
 
   return rows;
