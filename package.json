@@ -22,9 +22,27 @@
   ],
   "preferences": [
     {
+      "name": "codexSource",
+      "title": "Codex Account Source",
+      "description": "Choose one source. Accounts from the other source are ignored.",
+      "type": "dropdown",
+      "required": true,
+      "default": "codex-home",
+      "data": [
+        {
+          "title": "CODEX_HOME — configured directories",
+          "value": "codex-home"
+        },
+        {
+          "title": "codex-auth — all managed accounts",
+          "value": "codex-auth"
+        }
+      ]
+    },
+    {
       "name": "codexAccountPaths",
-      "title": "Codex Account Paths",
-      "description": "Comma-separated CODEX_HOME directories, one per account. Use Label=path to name an account explicitly, for example: ~/.codex, Work=~/.codex-work",
+      "title": "CODEX_HOME Paths",
+      "description": "Used only when Codex Account Source is CODEX_HOME. Comma-separated; Label=path supported.",
       "type": "textfield",
       "required": false,
       "default": "~/.codex"

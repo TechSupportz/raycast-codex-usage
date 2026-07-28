@@ -1,9 +1,12 @@
 import { getPreferenceValues } from "@raycast/api";
 import { CLAUDE_ACCOUNT_ID, fetchClaudeAccount } from "./providers/claude";
-import { codexAccountId, fetchCodexAccount, parseAccountPaths } from "./providers/codex";
+import { fetchCodexAccount, getCodexAccounts } from "./providers/codex";
+import { codexHomeAccountId, fetchCodexHomeAccount } from "./providers/codex-home";
+import { parseCodexHomePaths } from "./providers/codex-home-paths";
 import type { Account, ProviderId } from "./providers/types";
 
 type Preferences = {
+  codexSource: "codex-auth" | "codex-home";
   codexAccountPaths: string;
   showClaudeCode: boolean;
 };
@@ -37,15 +40,24 @@ export type ConfiguredAccount = {
 };
 
 export function getConfiguredAccounts(): ConfiguredAccount[] {
-  const { codexAccountPaths, showClaudeCode } = getPreferenceValues<Preferences>();
+  const { codexSource, codexAccountPaths, showClaudeCode } = getPreferenceValues<Preferences>();
 
-  const accounts: ConfiguredAccount[] = parseAccountPaths(codexAccountPaths ?? "").map((config) => ({
-    id: codexAccountId(config.home),
-    provider: "codex",
-    label: config.label,
-    refreshIntervalMs: REFRESH_INTERVAL_MS.codex,
-    fetch: () => fetchCodexAccount(config),
-  }));
+  const accounts: ConfiguredAccount[] =
+    codexSource === "codex-home"
+      ? parseCodexHomePaths(codexAccountPaths).map((config) => ({
+          id: codexHomeAccountId(config.home),
+          provider: "codex",
+          label: config.label,
+          refreshIntervalMs: REFRESH_INTERVAL_MS.codex,
+          fetch: () => fetchCodexHomeAccount(config),
+        }))
+      : getCodexAccounts().map((account) => ({
+          id: account.id,
+          provider: "codex",
+          label: account.email ?? account.label,
+          refreshIntervalMs: REFRESH_INTERVAL_MS.codex,
+          fetch: account.failure ? async () => account : () => fetchCodexAccount(account.id),
+        }));
 
   if (showClaudeCode) {
     accounts.push({

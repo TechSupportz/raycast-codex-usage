@@ -6,31 +6,40 @@ Raycast extension for checking your Codex and Claude Code usage limits from the 
 
 For each account, one section listing whichever rate-limit windows the provider reports:
 
-- **Codex** — the 5-hour and weekly limits, plus banked usage resets with a detail view showing every reset's grant and expiry dates
+- **Codex** — the 5-hour and weekly limits; `CODEX_HOME` mode also shows exact reset times and banked usage resets
 - **Claude Code** — the session and weekly limits
 
-Every window shows how much you have left, coloured by how close you are to the limit, and when it resets. Windows are rendered from whatever each API returns, so a limit that does not apply to your plan simply does not appear.
+Every window shows how much you have left, coloured by how close you are to the limit. Exact reset times appear when the selected source provides machine-readable timestamps.
 
 ## Multiple Codex accounts
 
-Codex keeps its credentials in `CODEX_HOME`, which defaults to `~/.codex`. If you keep a second account in another directory, add it in the extension's preferences under **Codex Account Paths** as a comma-separated list:
+By default, Codex accounts are read from configured `CODEX_HOME` directories. To use `codex-auth`, install it first:
 
-```
-~/.codex, Work=~/.codex-work
+```bash
+npm install -g @loongphy/codex-auth
+# or
+bun add -g @loongphy/codex-auth
 ```
 
-Account names are derived from the directory (`~/.codex` becomes "Personal", `~/.codex-work` becomes "Work"), or you can set one explicitly with `Label=path`. The plan and email address come from the API, so nothing about your accounts is stored in this repository.
+Then select `codex-auth` under **Codex Account Source**. Every stored account appears automatically. Use **Rename Account** in Raycast to give an email a shorter display name.
+
+In extension preferences, choose one **Codex Account Source**:
+
+- `codex-auth` discovers every managed account and enables switching.
+- `CODEX_HOME` reads only the configured directories.
+
+Sources are exclusive, so the same account is never shown twice.
 
 ## Requirements
 
 - macOS
 - [Raycast](https://www.raycast.com/)
-- For Codex limits: the [Codex CLI](https://openai.com/codex) on your `PATH`, signed in with `codex login`
+- For Codex limits: Codex CLI credentials in configured `CODEX_HOME` directories, or [codex-auth](https://github.com/loongphy/codex-auth) installed globally with npm or Bun
 - For Claude Code limits: [Claude Code](https://claude.com/claude-code) installed and signed in
 
 ## Credentials
 
-Codex token refresh is delegated to the Codex CLI. Claude Code is refreshed directly using its stored OAuth refresh token, without making an inference request. The extension coordinates with Claude Code's refresh lock, re-reads credentials after acquiring it, and saves rotated credentials back to the same source before using them.
+Codex credentials stay owned by the selected CLI: Codex CLI for `CODEX_HOME`, or `codex-auth` for managed accounts. Claude Code is refreshed directly using its stored OAuth refresh token, without making an inference request. The extension coordinates with Claude Code's refresh lock, re-reads credentials after acquiring it, and saves rotated credentials back to the same source before using them.
 
 Claude Code credentials are read from the macOS Keychain, falling back to `~/.claude/.credentials.json`.
 
@@ -42,15 +51,11 @@ Claude Code credentials are read from the macOS Keychain, falling back to `~/.cl
 
 ## Troubleshooting
 
-**An account shows "Signed Out"** — run `codex login` for that account, or `claude` for Claude Code. For a non-default Codex directory, set `CODEX_HOME` when logging in:
+**A CODEX_HOME account is missing** — confirm its configured directory contains `auth.json`. Sign in with `CODEX_HOME=~/.codex-work codex login`.
 
-```bash
-CODEX_HOME=~/.codex-work codex login
-```
+**A codex-auth account is missing** — confirm it appears in `codex-auth list`.
 
-**An account is missing entirely** — check that its path is listed in **Codex Account Paths** and that the directory contains an `auth.json`.
-
-**Codex will not load at all** — confirm `codex` runs in Terminal and is installed somewhere standard such as `/opt/homebrew/bin/codex`.
+**codex-auth will not load** — confirm `codex-auth list` works in Terminal, or reinstall it using one of the commands above.
 
 ## Development
 

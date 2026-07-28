@@ -1,365 +1,237 @@
-import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { execFile, execFileSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, join } from "node:path";
-import { buildCliPath, resolveExecutable } from "./cli";
-import { isRecord, type Account, type ResetCredit, type ResetCreditsResponse, type UsageWindow } from "./types";
-import { parseResetExpiry } from "../reset-expiry";
+import { dirname, join } from "node:path";
+import { promisify } from "node:util";
+import { buildCliPath } from "./cli";
+import { applyCodexAuthRegistry, parseCodexAuthTable } from "./codex-auth-table";
+import { fetchCodexResetCredits } from "./codex-reset-credits";
+import { isRecord } from "./types";
+import type { Account } from "./types";
 
-const AUTH_TIMEOUT_MS = 20000;
-const HTTP_TIMEOUT_MS = 10000;
-const USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
-const RESET_CREDITS_URL = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits";
-const USER_AGENT = "raycast-ai-usage";
-const CODEX_EXTRA_PATHS = [join(homedir(), ".local/bin"), join(homedir(), ".npm-global/bin")];
+const execFileAsync = promisify(execFile);
+const CACHE_MS = 10_000;
+const INSTALL_MESSAGE =
+  "codex-auth not found. Install it with `npm install -g @loongphy/codex-auth` or `bun add -g @loongphy/codex-auth`.";
 
-const CODEX_EXECUTABLE_CANDIDATES = [
-  "/opt/homebrew/bin/codex",
-  "/usr/local/bin/codex",
-  "/usr/bin/codex",
-  join(homedir(), ".local/bin/codex"),
-  join(homedir(), ".npm-global/bin/codex"),
-  "codex",
-];
+let cached: { at: number; accounts: Promise<Account[]> } | null = null;
 
-export type CodexAccountConfig = {
-  label: string;
-  home: string;
-};
+/** Fast local-only discovery used to create one Raycast row per stored account. */
+export function getCodexAccounts(): Account[] {
+  try {
+    const command = resolveCodexAuthCommand();
+    const output = execFileSync(command.file, [...command.prefix, "list", "--skip-api"], {
+      encoding: "utf8",
+      timeout: 5_000,
+      env: command.env,
+    });
 
-/**
- * Parses the account-paths preference. Each entry is either a bare path or
- * `Label=path`; without an explicit label we derive one from the directory
- * name, so `~/.codex` reads as "Personal" and `~/.codex-nus` as "Nus".
- */
-export function parseAccountPaths(raw: string): CodexAccountConfig[] {
-  return raw
-    .split(",")
-    .map((entry) => entry.trim())
-    .filter(Boolean)
-    .map((entry) => {
-      const separator = entry.indexOf("=");
-      const label = separator === -1 ? null : entry.slice(0, separator).trim();
-      const path = separator === -1 ? entry : entry.slice(separator + 1).trim();
-      const home = expandHome(path);
-
-      return { label: label || deriveLabel(home), home };
-    })
-    .filter((config) => config.home.length > 0);
+    return parseAccounts(output);
+  } catch (error) {
+    return [unavailableAccount(error)];
+  }
 }
 
-function expandHome(path: string): string {
-  if (path === "~") {
-    return homedir();
+export async function fetchCodexAccount(id: string): Promise<Account> {
+  const base = emptyAccount(id);
+
+  try {
+    const accounts = await listCodexAccounts();
+    return (
+      accounts.find((candidate) => candidate.id === id) ?? {
+        ...base,
+        failure: { kind: "expired", message: "codex-auth no longer lists this account." },
+      }
+    );
+  } catch (error) {
+    return {
+      ...base,
+      failure: { kind: "error", message: error instanceof Error ? error.message : String(error) },
+    };
+  }
+}
+
+export async function switchCodexAccount(query: string, expectedId: string): Promise<void> {
+  const command = resolveCodexAuthCommand();
+  const wasRunning = await isChatGptRunning();
+
+  try {
+    await execFileAsync(command.file, [...command.prefix, "switch", query], {
+      timeout: 30_000,
+      env: command.env,
+    });
+  } catch (error) {
+    throw new Error(commandErrorMessage(error));
   }
 
-  return path.startsWith("~/") ? join(homedir(), path.slice(2)) : path;
-}
+  const expectedKey = expectedId.startsWith("codex-auth:") ? expectedId.slice("codex-auth:".length) : null;
+  const registry = readRegistry();
+  const activeKey = isRecord(registry) ? registry.active_account_key : null;
 
-function deriveLabel(home: string): string {
-  const suffix = basename(home)
-    .replace(/^\.?codex/i, "")
-    .replace(/^[-_]/, "");
-
-  if (!suffix) {
-    return "Personal";
+  if (expectedKey && activeKey !== expectedKey) {
+    throw new Error("codex-auth did not activate the selected account.");
   }
 
-  return suffix.charAt(0).toUpperCase() + suffix.slice(1);
+  cached = null;
+
+  if (wasRunning) {
+    await execFileAsync("/usr/bin/pkill", ["-KILL", "-f", "^/Applications/ChatGPT\\.app/Contents/"]).catch(
+      () => undefined,
+    );
+
+    for (let attempt = 0; attempt < 100 && (await isChatGptRunning()); attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+
+    if (await isChatGptRunning()) {
+      throw new Error("Account switched, but Codex did not finish quitting. Reopen it manually.");
+    }
+
+    try {
+      await execFileAsync("/usr/bin/open", ["-b", "com.openai.codex"]);
+    } catch {
+      throw new Error("Account switched, but Codex could not reopen. Reopen it manually.");
+    }
+  }
 }
 
-export function codexAccountId(home: string): string {
-  return `codex:${home}`;
+function commandErrorMessage(error: unknown): string {
+  if (!isRecord(error)) {
+    return error instanceof Error ? error.message : String(error);
+  }
+
+  const stderr = typeof error.stderr === "string" ? error.stderr.trim() : "";
+  const stdout = typeof error.stdout === "string" ? error.stdout.trim() : "";
+  const message = error instanceof Error ? error.message : "codex-auth could not switch accounts.";
+
+  return stderr || stdout || message;
 }
 
-export async function fetchCodexAccount(config: CodexAccountConfig): Promise<Account> {
-  const base: Account = {
-    id: codexAccountId(config.home),
+function emptyAccount(id: string): Account {
+  return {
+    id,
     provider: "codex",
-    label: config.label,
+    label: "Codex",
     plan: null,
     email: null,
     windows: [],
     resets: null,
     failure: null,
   };
+}
 
-  if (!existsSync(join(config.home, "auth.json"))) {
-    return { ...base, failure: { kind: "expired", message: `No credentials in ${config.home}. Run \`codex login\`.` } };
+function listCodexAccounts(): Promise<Account[]> {
+  if (cached && Date.now() - cached.at < CACHE_MS) {
+    return cached.accounts;
   }
 
-  let token: string;
+  const command = resolveCodexAuthCommand();
+  const accounts = execFileAsync(command.file, [...command.prefix, "list"], {
+    encoding: "utf8",
+    timeout: 30_000,
+    env: command.env,
+  }).then(async ({ stdout }) => addResetCredits(parseAccounts(stdout)));
 
+  cached = { at: Date.now(), accounts };
+  return accounts;
+}
+
+function parseAccounts(output: string): Account[] {
+  return applyCodexAuthRegistry(parseCodexAuthTable(output), readRegistry());
+}
+
+function readRegistry(): unknown {
   try {
-    // The CLI owns these credentials, so we ask it to refresh rather than
-    // spending the refresh token ourselves and desyncing its stored copy.
-    token = await readAuthToken(config.home);
-  } catch (error) {
-    return { ...base, failure: { kind: "expired", message: describe(error) } };
-  }
-
-  const accountId = getChatGptAccountId(token);
-
-  try {
-    const usage = await fetchUsage(token, accountId);
-    const account = { ...base, ...usage };
-
-    // Only the account that actually has resets pays for the second call.
-    if (usage.resetCount > 0) {
-      account.resets = await fetchResetCredits(token, accountId).catch(() => null);
-    }
-
-    return account;
-  } catch (error) {
-    return { ...base, failure: { kind: "error", message: describe(error) } };
-  }
-}
-
-/** Spawns `codex app-server` under the given CODEX_HOME purely to get a fresh token. */
-function readAuthToken(codexHome: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(resolveExecutable(CODEX_EXECUTABLE_CANDIDATES, "codex"), ["app-server"], {
-      env: { ...process.env, CODEX_HOME: codexHome, PATH: buildCliPath(CODEX_EXTRA_PATHS) },
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-
-    let stdout = "";
-    let stderr = "";
-    let settled = false;
-
-    const timeout = setTimeout(
-      () => finish(new Error("Timed out waiting for Codex to report auth status.")),
-      AUTH_TIMEOUT_MS,
-    );
-
-    child.stdout.on("data", (chunk: Buffer) => {
-      stdout += chunk.toString("utf8");
-      const lines = stdout.split("\n");
-      stdout = lines.pop() ?? "";
-
-      for (const line of lines) {
-        handleLine(line);
-      }
-    });
-
-    child.stderr.on("data", (chunk: Buffer) => {
-      stderr += chunk.toString("utf8");
-    });
-
-    child.on("error", (error) => {
-      if ("code" in error && error.code === "ENOENT") {
-        finish(
-          new Error(
-            `Could not find the Codex CLI. Checked: ${CODEX_EXECUTABLE_CANDIDATES.join(", ")}. Install Codex or add it to a standard PATH location.`,
-          ),
-        );
-        return;
-      }
-
-      finish(error);
-    });
-
-    child.on("exit", (code) => {
-      if (!settled && code !== 0) {
-        finish(new Error(`Codex app-server exited with code ${code}.${formatStderr(stderr)}`));
-      }
-    });
-
-    child.stdin.write(
-      JSON.stringify({
-        id: 1,
-        method: "initialize",
-        params: { clientInfo: { name: USER_AGENT, version: "1.0.0" } },
-      }) + "\n",
-    );
-
-    function handleLine(line: string) {
-      let message: { id?: number; result?: unknown; error?: { message?: string } };
-
-      try {
-        message = JSON.parse(line);
-      } catch {
-        return;
-      }
-
-      if (message.id === 1) {
-        child.stdin.write(
-          JSON.stringify({
-            id: 2,
-            method: "getAuthStatus",
-            params: { includeToken: true, refreshToken: true },
-          }) + "\n",
-        );
-        return;
-      }
-
-      if (message.id !== 2) {
-        return;
-      }
-
-      if (message.error) {
-        finish(new Error(`${message.error.message ?? "Codex could not report auth status"}.${formatStderr(stderr)}`));
-        return;
-      }
-
-      const token = isRecord(message.result) ? message.result.authToken : null;
-
-      if (typeof token !== "string" || !token) {
-        finish(new Error("Codex is not signed in. Run `codex login`."));
-        return;
-      }
-
-      finish(null, token);
-    }
-
-    function finish(error: Error | null, token?: string) {
-      if (settled) {
-        return;
-      }
-
-      settled = true;
-      clearTimeout(timeout);
-      child.kill();
-
-      if (error) {
-        reject(error);
-        return;
-      }
-
-      resolve(token as string);
-    }
-  });
-}
-
-type UsageResult = {
-  plan: string | null;
-  email: string | null;
-  windows: UsageWindow[];
-  resetCount: number;
-};
-
-async function fetchUsage(token: string, accountId: string | null): Promise<UsageResult> {
-  const payload = await getJson(USAGE_URL, token, accountId);
-
-  if (!isRecord(payload)) {
-    throw new Error("Codex returned an unexpected usage response.");
-  }
-
-  const rateLimit = isRecord(payload.rate_limit) ? payload.rate_limit : {};
-  const resetCredits = isRecord(payload.rate_limit_reset_credits) ? payload.rate_limit_reset_credits : {};
-
-  return {
-    plan: typeof payload.plan_type === "string" ? payload.plan_type : null,
-    email: typeof payload.email === "string" ? payload.email : null,
-    windows: [toWindow(rateLimit.primary_window, "primary"), toWindow(rateLimit.secondary_window, "secondary")].filter(
-      (window): window is UsageWindow => window !== null,
-    ),
-    resetCount: typeof resetCredits.available_count === "number" ? resetCredits.available_count : 0,
-  };
-}
-
-function toWindow(value: unknown, id: string): UsageWindow | null {
-  if (!isRecord(value) || typeof value.used_percent !== "number") {
-    return null;
-  }
-
-  const seconds = typeof value.limit_window_seconds === "number" ? value.limit_window_seconds : null;
-
-  return {
-    id: seconds ? `${seconds}` : id,
-    label: formatWindowLabel(seconds),
-    usedPercent: value.used_percent,
-    resetsAt: typeof value.reset_at === "number" ? value.reset_at * 1000 : null,
-  };
-}
-
-function formatWindowLabel(seconds: number | null): string {
-  if (seconds === null) {
-    return "Limit";
-  }
-
-  if (seconds === 18000) {
-    return "5h Limit";
-  }
-
-  if (seconds === 604800) {
-    return "Weekly Limit";
-  }
-
-  const hours = Math.round(seconds / 3600);
-
-  return hours >= 24 ? `${Math.round(hours / 24)}d Limit` : `${hours}h Limit`;
-}
-
-async function fetchResetCredits(token: string, accountId: string | null): Promise<ResetCreditsResponse> {
-  const payload = await getJson(RESET_CREDITS_URL, token, accountId);
-
-  if (!isRecord(payload) || !Array.isArray(payload.credits)) {
-    throw new Error("Codex returned an invalid reset-credit response.");
-  }
-
-  const credits = payload.credits.filter(isResetCredit);
-
-  return { credits, available_count: credits.filter((credit) => credit.status === "available").length };
-}
-
-function isResetCredit(value: unknown): value is ResetCredit {
-  return (
-    isRecord(value) &&
-    typeof value.id === "string" &&
-    typeof value.status === "string" &&
-    typeof value.granted_at === "string" &&
-    Number.isFinite(parseResetExpiry(value.granted_at)) &&
-    typeof value.expires_at === "string" &&
-    Number.isFinite(parseResetExpiry(value.expires_at)) &&
-    (value.title == null || typeof value.title === "string") &&
-    (value.description == null || typeof value.description === "string")
-  );
-}
-
-async function getJson(url: string, token: string, accountId: string | null): Promise<unknown> {
-  const headers: Record<string, string> = {
-    Authorization: `Bearer ${token}`,
-    "OpenAI-Beta": "codex-1",
-    originator: "codex_cli_rs",
-    "User-Agent": USER_AGENT,
-    Accept: "application/json",
-  };
-
-  if (accountId) {
-    headers["ChatGPT-Account-Id"] = accountId;
-  }
-
-  const response = await fetch(url, { headers, signal: AbortSignal.timeout(HTTP_TIMEOUT_MS) });
-
-  if (!response.ok) {
-    throw new Error(`Codex usage returned HTTP ${response.status}.`);
-  }
-
-  return response.json();
-}
-
-function getChatGptAccountId(token: string): string | null {
-  try {
-    const payload = JSON.parse(Buffer.from(token.split(".")[1], "base64url").toString("utf8")) as {
-      "https://api.openai.com/auth"?: { chatgpt_account_id?: string };
-    };
-
-    return payload["https://api.openai.com/auth"]?.chatgpt_account_id ?? null;
+    return JSON.parse(readFileSync(join(homedir(), ".codex/accounts/registry.json"), "utf8"));
   } catch {
     return null;
   }
 }
 
-function formatStderr(stderr: string): string {
-  const meaningfulLine = stderr
-    .split("\n")
-    .map((line) => line.trim())
-    .find((line) => line && !line.startsWith("WARNING:"));
+async function addResetCredits(accounts: Account[]): Promise<Account[]> {
+  const result: Account[] = [];
 
-  return meaningfulLine ? ` ${meaningfulLine}` : "";
+  for (const account of accounts) {
+    const accountKey = account.id.startsWith("codex-auth:") ? account.id.slice("codex-auth:".length) : null;
+
+    if (!accountKey || accountKey === "unavailable") {
+      result.push(account);
+      continue;
+    }
+
+    try {
+      const filename = `${Buffer.from(accountKey).toString("base64url")}.auth.json`;
+      const auth: unknown = JSON.parse(readFileSync(join(homedir(), ".codex/accounts", filename), "utf8"));
+      const tokens = isRecord(auth) && isRecord(auth.tokens) ? auth.tokens : {};
+      const accessToken = typeof tokens.access_token === "string" ? tokens.access_token : null;
+      const accountId = typeof tokens.account_id === "string" ? tokens.account_id : null;
+
+      result.push({
+        ...account,
+        resets: accessToken ? await fetchCodexResetCredits(accessToken, accountId).catch(() => null) : null,
+      });
+    } catch {
+      result.push(account);
+    }
+  }
+
+  return result;
 }
 
-function describe(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+async function isChatGptRunning(): Promise<boolean> {
+  try {
+    await execFileAsync("/usr/bin/pgrep", ["-f", "^/Applications/ChatGPT\\.app/Contents/"]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+type CodexAuthCommand = {
+  file: string;
+  prefix: string[];
+  env: NodeJS.ProcessEnv;
+};
+
+function resolveCodexAuthCommand(): CodexAuthCommand {
+  const bun = join(homedir(), ".bun/bin/bun");
+  const bunScript = join(homedir(), ".bun/bin/codex-auth");
+
+  if (existsSync(bun) && existsSync(bunScript)) {
+    return { file: bun, prefix: [bunScript], env: process.env };
+  }
+
+  const executable = [
+    "/opt/homebrew/bin/codex-auth",
+    "/usr/local/bin/codex-auth",
+    join(homedir(), ".local/bin/codex-auth"),
+    join(homedir(), ".npm-global/bin/codex-auth"),
+    ...(process.env.PATH ?? "").split(":").map((directory) => join(directory, "codex-auth")),
+  ].find(existsSync);
+
+  if (!executable) {
+    throw new Error(INSTALL_MESSAGE);
+  }
+
+  return {
+    file: executable,
+    prefix: [],
+    env: { ...process.env, PATH: buildCliPath([dirname(executable)]) },
+  };
+}
+
+function unavailableAccount(error: unknown): Account {
+  return {
+    id: "codex-auth:unavailable",
+    provider: "codex",
+    label: "codex-auth",
+    plan: null,
+    email: null,
+    windows: [],
+    resets: null,
+    failure: {
+      kind: "error",
+      message: error instanceof Error ? error.message : INSTALL_MESSAGE,
+    },
+  };
 }
