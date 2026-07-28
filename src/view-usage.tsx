@@ -354,14 +354,6 @@ function buildAccountRows({ config, account }: AccountState): ReactElement[] {
     rows.push(<List.Item.Detail.Metadata.Label key="email" title="Account" text={account.email} icon={Icon.Person} />);
   }
 
-  if (account?.isCurrent) {
-    rows.push(
-      <List.Item.Detail.Metadata.TagList key="active" title="Status">
-        <List.Item.Detail.Metadata.TagList.Item text="Active" color={Color.Blue} icon={Icon.CheckCircle} />
-      </List.Item.Detail.Metadata.TagList>,
-    );
-  }
-
   return rows;
 }
 
